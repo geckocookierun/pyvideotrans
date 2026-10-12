@@ -1,6 +1,5 @@
 import json
 import random
-import re
 import threading
 import time
 import traceback
@@ -13,8 +12,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QMessageBox, QMenu, QInputDialog, QSplitter, QStackedLayout, QCheckBox,
-    QTextEdit
+    QMessageBox, QMenu, QInputDialog, QSplitter, QStackedLayout, QCheckBox
 )
 from pydub import AudioSegment
 
@@ -78,258 +76,31 @@ class ReDubb(QThread):
             msg = f'error:{except_msg}:\n' + traceback.format_exc()
             self.uito.emit(msg)
 
-# 非本地：一次 tts.run 配多行，复用主流程配音逻辑（Edge-TTS 并发+重试）
-class BatchReDubb(QThread):
+# 非本地，直接一个重新配音起一个配音任务
+class ReDubbNolocal(QThread):
     uito = Signal(str)
 
-    def __init__(self, *, parent=None, jobs=None, language=None):
+    def __init__(self, *, parent=None, idx=None, tts_dict=None, language=None):
         super().__init__(parent=parent)
-        # jobs: [{'row': int, 'tts_dict': dict}, ...]
-        self.jobs = jobs or []
+        self.tts_dict = tts_dict
         self.language = language
+        self.idx = idx
 
     def run(self):
         try:
-            if not self.jobs:
-                self.uito.emit('error:empty')
-                return
-            queue_tts = [job['tts_dict'] for job in self.jobs]
             tts.run(
-                queue_tts=queue_tts,
+                queue_tts=[self.tts_dict],
                 language=self.language,
-                tts_type=int(queue_tts[0]['tts_type']),
-                is_cuda=app_cfg.onlyone_is_cuda,
+                tts_type=self.tts_dict['tts_type'],
+                is_cuda=app_cfg.onlyone_is_cuda
             )
-            rows = ','.join(str(job['row']) for job in self.jobs)
-            self.uito.emit(f'ok:{rows}')
+            self.uito.emit(f"ok:{self.idx}")
         except Exception as e:
             from videotrans.configure.excepts import get_msg_from_except
             except_msg = get_msg_from_except(e)
             msg = f'error:{except_msg}:\n' + traceback.format_exc()
             self.uito.emit(msg)
 
-
-PASSAGE_GAP_MS = 2500
-PASSAGE_CPS_FALLBACK = 18.0
-PASSAGE_CHAR_HEADROOM = 0.92
-
-
-def expand_passage_spans(times, seeds):
-    """Grow each seed across neighboring cues until a pause of PASSAGE_GAP_MS."""
-    n = len(times)
-    ranges = []
-    for seed in seeds:
-        if seed < 0 or seed >= n:
-            continue
-        lo = hi = seed
-        while lo > 0 and times[lo][0] - times[lo - 1][1] < PASSAGE_GAP_MS:
-            lo -= 1
-        while hi + 1 < n and times[hi + 1][0] - times[hi][1] < PASSAGE_GAP_MS:
-            hi += 1
-        ranges.append((lo, hi))
-    ranges.sort()
-    merged = []
-    for lo, hi in ranges:
-        if merged and lo <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
-        else:
-            merged.append((lo, hi))
-    return merged
-
-
-def split_passage_times(start_ms, end_ms, texts):
-    """Split a fixed window across lines in proportion to their length."""
-    weights = [max(len((text or '').strip()), 1) for text in texts]
-    total = sum(weights)
-    span = max(int(end_ms) - int(start_ms), len(weights))
-    times = []
-    cursor = int(start_ms)
-    for i, weight in enumerate(weights):
-        if i == len(weights) - 1:
-            nxt = int(end_ms)
-        else:
-            used = sum(weights[:i + 1])
-            nxt = int(start_ms) + int(round(span * used / total))
-            nxt = min(max(nxt, cursor + 1), int(end_ms) - (len(weights) - i - 1))
-        times.append((cursor, nxt))
-        cursor = nxt
-    return times
-
-
-def passage_target_chars(dubbed_lines, tts_total_s, window_s):
-    """Estimate how many characters fit the spoken window for this voice."""
-    char_total = sum(len(text or '') for text in dubbed_lines)
-    cps = (char_total / tts_total_s) if tts_total_s > 0.5 else PASSAGE_CPS_FALLBACK
-    return max(40, int(window_s * cps * PASSAGE_CHAR_HEADROOM))
-
-
-def clean_passage(text):
-    text = re.sub(r'<think>.*?</think>', '', text or '', flags=re.I | re.S)
-    text = re.sub(r'</?TRANSLATE_TEXT>', '', text, flags=re.I)
-    lines = []
-    for line in text.splitlines():
-        line = line.strip().strip('"\'“”«»')
-        line = re.sub(r'^\d+[\.\)、]\s*', '', line)
-        line = re.sub(r'^[-*]\s*', '', line).strip()
-        if line:
-            lines.append(line)
-    return lines
-
-
-def _split_passage_line(text):
-    for pattern in (r'(?<=[\.!?…])\s+', r'(?<=[;；])\s+', r'(?<=[,，])\s+'):
-        bits = [bit.strip() for bit in re.split(pattern, text, maxsplit=1) if bit.strip()]
-        if len(bits) == 2 and min(len(bit) for bit in bits) >= 8:
-            return bits
-    return None
-
-
-def fit_passage_lines(lines, count):
-    """Return exactly `count` narration lines, or None."""
-    lines = [line.strip() for line in lines if line and line.strip()]
-    if count <= 0 or not lines:
-        return None
-    if len(lines) > count:
-        return lines[:count - 1] + [' '.join(lines[count - 1:])]
-    while len(lines) < count:
-        index = max(range(len(lines)), key=lambda i: len(lines[i]))
-        parts = _split_passage_line(lines[index])
-        if not parts:
-            return None
-        lines[index:index + 1] = parts
-    return lines
-
-
-def _format_numbered(lines):
-    return "\n".join(f"{i}. {text}" for i, text in enumerate(lines, 1))
-
-
-def passage_prompt(dubbed_lines, source_lines, window_s, target_chars):
-    n = len(dubbed_lines)
-    low = max(40, int(target_chars * 0.88))
-    source = _format_numbered([text for text in (source_lines or []) if text])
-    source_block = ""
-    if source.strip():
-        source_block = (
-            "\nSource lines carry the meaning. Prefer them when a dubbed line is "
-            "split mid-word or mistranslated.\n"
-            f"{source}\n"
-        )
-    return (
-        "Retell this whole subtitle passage as third-person narration.\n"
-        "Write brand-new complete sentences, as a narrator who just watched the scene.\n"
-        "Do NOT shorten by deleting words from the dubbed lines. "
-        "Do NOT only swap pronouns and keep the old sentence frames.\n"
-        "Change verbs and phrasing. Every sentence needs a clear subject and verb.\n"
-        "Keep every event, name, number, and relationship.\n"
-        "Forbidden: choppy fragments, missing subjects, truncated clauses.\n"
-        f"Write in the same language as the dubbed lines. "
-        f"Write exactly {n} sentences, one sentence per line.\n"
-        f"The spoken window is {window_s:.1f} seconds. "
-        f"Keep the whole passage between {low} and {target_chars} characters, including spaces.\n"
-        "No labels, no timestamps, no character counts, no explanation.\n"
-        "\n"
-        "Dubbed lines:\n"
-        f"{_format_numbered(dubbed_lines)}\n"
-        f"{source_block}\n"
-        "# OUTPUT FORMAT\n"
-        "Output ONLY the narration inside <TRANSLATE_TEXT> and </TRANSLATE_TEXT>.\n"
-        "\n"
-        "<INPUT>\n"
-        "{batch_input}\n"
-        "</INPUT>"
-    )
-
-
-def passage_retry_prompt(lines, target_chars, count):
-    chars = sum(len(line) for line in lines)
-    low = max(40, int(target_chars * 0.88))
-    return (
-        "The draft below is still too long for the spoken window. "
-        "Retell the WHOLE passage again as third-person narration.\n"
-        "Write brand-new complete sentences with subject and verb. "
-        "Do not delete words until a sentence breaks. "
-        "Do not only swap pronouns.\n"
-        f"Current draft is {chars} characters. "
-        f"Write exactly {count} sentences, one per line, in the same language.\n"
-        f"Keep the whole passage between {low} and {target_chars} characters.\n"
-        "Keep every event, name, and number.\n"
-        "\n"
-        f"{_format_numbered(lines)}\n"
-        "\n"
-        "# OUTPUT FORMAT\n"
-        "Output ONLY the narration inside <TRANSLATE_TEXT> and </TRANSLATE_TEXT>.\n"
-        "\n"
-        "<INPUT>\n"
-        "{batch_input}\n"
-        "</INPUT>"
-    )
-
-
-class PassageRewrite(QThread):
-    """Retell each neighboring span as new narration, without touching the table."""
-    finished_ok = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, *, parent=None, spans=None, translate_type=0):
-        super().__init__(parent=parent)
-        self.spans = spans or []
-        self.translate_type = translate_type
-
-    def _ask(self, model, prompt, text):
-        model.prompt = prompt
-        raw = model._item_task(text)
-        if not raw:
-            return []
-        return clean_passage(raw)
-
-    def _rewrite_span(self, model, span):
-        dubbed = span['dubbed']
-        count = len(dubbed)
-        lines = fit_passage_lines(self._ask(
-            model,
-            passage_prompt(dubbed, span['source'], span['window_s'], span['target_chars']),
-            "\n".join(dubbed),
-        ), count)
-        if not lines:
-            return None
-        if sum(len(line) for line in lines) > span['target_chars'] * 1.15:
-            shorter = fit_passage_lines(self._ask(
-                model,
-                passage_retry_prompt(lines, span['target_chars'], count),
-                "\n".join(lines),
-            ), count)
-            if shorter:
-                lines = shorter
-        return lines
-
-    def run(self):
-        from videotrans.translator._openaicompat import OpenAICampat
-        from videotrans.translator._runner import get_model_transobj
-        try:
-            model = get_model_transobj(translate_type=self.translate_type)
-        except Exception as e:
-            self.failed.emit(str(e))
-            return
-        if not isinstance(model, OpenAICampat):
-            self.failed.emit('channel')
-            return
-        if getattr(model, 'ainame', '') == 'openrouter':
-            model.extra_body = {"reasoning": {"enabled": False}}
-        model.temperature = 0.4
-        results = []
-        for span in self.spans:
-            try:
-                lines = self._rewrite_span(model, span)
-            except Exception as e:
-                logger.warning(f'Passage rewrite failed: {e}')
-                self.failed.emit(str(e))
-                return
-            if not lines:
-                self.failed.emit('empty')
-                return
-            results.append({**span, 'new_lines': lines})
-        self.finished_ok.emit(results)
 
 
 class EditDubbingResultDialog(QDialog,DanspMixin):
@@ -348,8 +119,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self._video_end_ms = -1
         self._audio_playing = False
         self.queue_tts = []
-        self._rewrite_thread = None
-        self._batch_redub = False
 
         # 任务
         self.task=None
@@ -494,19 +263,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         help_button.clicked.connect(self.help_doc)
         
         
-        hpassage = QHBoxLayout()
-        self.btn_select_exceeded = QPushButton(tr("Select exceeded lines"))
-        self.btn_select_exceeded.setCursor(Qt.PointingHandCursor)
-        self.btn_select_exceeded.setToolTip(tr("Tick every line whose TTS audio is longer than the subtitle slot"))
-        self.btn_select_exceeded.clicked.connect(self._select_exceeded_lines)
-        self.btn_rewrite_passage = QPushButton(tr("Rewrite this passage"))
-        self.btn_rewrite_passage.setCursor(Qt.PointingHandCursor)
-        self.btn_rewrite_passage.setToolTip(tr("Rewrite the selected line together with neighboring lines, show the new narration, then re-dub it. The passage start and end times stay the same."))
-        self.btn_rewrite_passage.clicked.connect(self._rewrite_passage)
-        hpassage.addWidget(self.btn_select_exceeded)
-        hpassage.addWidget(self.btn_rewrite_passage)
-        hpassage.addStretch()
-
         hautorate=QHBoxLayout()
         
         self.voice_autorate = QCheckBox()
@@ -545,7 +301,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         hautorate.addWidget(tipslabe)       
         hautorate.addStretch()
 
-        bottom_layout.addLayout(hpassage)
         bottom_layout.addLayout(hautorate)
         
         bottom_btn_layout = QHBoxLayout()
@@ -637,7 +392,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             h_header.setSectionResizeMode(6, QHeaderView.Stretch)  # Text
             
             # 设置列宽
-            self.table.setColumnWidth(0, 78)   # Line + checkbox
+            self.table.setColumnWidth(0, 50)   # Line
             self.table.setColumnWidth(1, 100)   # Timex
             self.table.setColumnWidth(2, 30)   # Play
             self.table.setColumnWidth(3, 100)   # Start
@@ -721,8 +476,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             
             # 0: Line
             line_item = QTableWidgetItem(str(data['line']))
-            line_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
-            line_item.setCheckState(Qt.Unchecked)
+            line_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             line_item.setData(Qt.UserRole, row)
             line_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 0, line_item)
@@ -1136,344 +890,89 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             video_end_ms=int(item['end_time']),
         )
 
-    def _prepare_redub_job(self, row):
-        """Delete old audio and build one TTS job for this row."""
-        filename = self.queue_tts[row]['filename']
-        Path(filename).parent.mkdir(parents=True, exist_ok=True)
+    def _redub(self, row):
+        """重配音"""
+        self.stop_countdown()
+        
+        # 删除旧文件
         try:
-            Path(filename).unlink(missing_ok=True)
-            Path(f"{filename}.mp3").unlink(missing_ok=True)
+            Path(self.queue_tts[row]['filename']).unlink(missing_ok=True)
         except OSError as e:
             logger.warning(e)
+        
+        # 重置时长
         self.queue_tts[row]['dubbing_s'] = 0.0
-        self._refresh_row(row, msg=f'{tr("Re-dubbed")}...')
+        self._refresh_row(row,msg=f'{tr("Re-dubbed")}...')
+        
+        # 获取当前文本
         text_item = self.table.item(row, 6)
         current_text = text_item.text() if text_item else self.queue_tts[row]['text']
+        
+        # 准备TTS参数
         tts_dict = self.queue_tts[row].copy()
         tts_dict['text'] = current_text
-        return {'row': row, 'tts_dict': tts_dict}
-
-    def _start_batch_redub(self, rows):
-        """Re-dub many lines in one tts.run call, same path as main dubbing."""
-        jobs = [self._prepare_redub_job(row) for row in rows]
-        if not jobs:
-            self._set_passage_busy(False)
-            return
-        self._batch_redub = True
-        self.task = BatchReDubb(parent=self, jobs=jobs, language=self.language)
-        self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
-        self.task.start()
-
-    def _redub(self, row):
-        """重配音 — 单行也走主流程同款 tts.run（非本地）或本地 ReDubb 队列。"""
-        self.stop_countdown()
-        job = self._prepare_redub_job(row)
-        tts_dict = job['tts_dict']
         if int(tts_dict['tts_type']) not in tts.LOCAL_BUILTIN:
-            self._batch_redub = True
-            self._set_passage_busy(True)
-            self.task = BatchReDubb(parent=self, jobs=[job], language=self.language)
+            self.task = ReDubbNolocal(parent=self, idx=row,tts_dict=tts_dict, language=self.language)
             self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
             self.task.start()
-            return
+        else:
+            _REDUBB_QUEUE[tts_dict['filename']]=tts_dict
+            _FILENAME_ROW_MAP[tts_dict['filename']]=row
+            try:
+                atomic_write_json([it for it in _REDUBB_QUEUE.values()],REDUBB_QUEUE_FILE)
+            except (OSError,PermissionError):
+                _retry=0
+                while 1:
+                    # 可能遇到权限失败或读写冲突
+                    if _retry>5:
+                        raise
+                    try:
+                        Path(REDUBB_QUEUE_FILE).write_text(json.dumps([it for it in _REDUBB_QUEUE.values()]),encoding='utf-8')
+                    except (OSError,PermissionError):
+                        _retry+=1
+                        time.sleep(round(random.random()*3.5,1))
+                    else:
+                        break
+            # 启动后台线程
+            if not self.task:
+                self.task = ReDubb(parent=self, tts_dict=tts_dict, language=self.language)
+                self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
+                self.task.start()
 
-        _REDUBB_QUEUE[tts_dict['filename']] = tts_dict
-        _FILENAME_ROW_MAP[tts_dict['filename']] = row
-        try:
-            atomic_write_json([it for it in _REDUBB_QUEUE.values()], REDUBB_QUEUE_FILE)
-        except (OSError, PermissionError):
-            _retry = 0
-            while 1:
-                if _retry > 5:
-                    raise
-                try:
-                    Path(REDUBB_QUEUE_FILE).write_text(
-                        json.dumps([it for it in _REDUBB_QUEUE.values()]), encoding='utf-8'
-                    )
-                except (OSError, PermissionError):
-                    _retry += 1
-                    time.sleep(round(random.random() * 3.5, 1))
-                else:
-                    break
-        if not self.task:
-            self.task = ReDubb(parent=self, tts_dict=tts_dict, language=self.language)
-            self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
-            self.task.start()
-
-    def _refresh_redub_row(self, idx):
-        if idx < 0 or idx >= len(self.queue_tts):
-            return None
-        item = self.queue_tts[idx]
-        try:
-            if Path(item['filename']).exists():
-                item['dubbing_s'] = len(AudioSegment.from_file(item['filename'])) / 1000.0
-            else:
-                item['dubbing_s'] = 0.0
-        except Exception:
-            item['dubbing_s'] = 0.0
-        self._refresh_row(idx)
-        return item
 
     def _on_redub_finished(self, msg):
-        """重配音完成回调 — 支持 ok:3 或 ok:0,1,2,3"""
+        """重配音完成回调"""
         if msg.startswith("ok:"):
             try:
-                idxs = [int(part) for part in msg[3:].split(',') if part.strip() != '']
-            except (ValueError, TypeError, IndexError):
+                idx = int(msg[3:])
+            except (ValueError,TypeError,IndexError):
                 return
-            last_item = None
-            for idx in idxs:
-                item = self._refresh_redub_row(idx)
-                if item is not None:
-                    last_item = item
-            self._batch_redub = False
-            self._set_passage_busy(False)
-            if last_item and len(idxs) == 1:
-                self._play_with_video(
-                    audio_path=last_item['filename'],
-                    video_start_ms=last_item['start_time'],
-                    video_end_ms=last_item['end_time'],
-                )
+            if idx < 0 or idx >= len(self.queue_tts):
+                return
+            item = self.queue_tts[idx]
+            
+            # 读取新文件时长
+            try:
+                if Path(item['filename']).exists():
+                    item['dubbing_s'] = len(AudioSegment.from_file(item['filename'])) / 1000.0
+                else:
+                    item['dubbing_s'] = 0.0
+            except Exception:
+                item['dubbing_s'] = 0.0
+            
+            # 更新状态显示
+            self._refresh_row(idx)
+            
+            # 播放新音频 + video segment
+            self._play_with_video(
+                audio_path=item['filename'],
+                video_start_ms=item['start_time'],
+                video_end_ms=item['end_time'],
+            )
         else:
-            self._batch_redub = False
-            self._set_passage_busy(False)
+            # 崩溃停止任务
             Path(REDUBB_STATUS_FILE).write_text('end')
             QMessageBox.information(self, 'Error', msg)
-
-    def _line_overrun(self, row):
-        item = self.queue_tts[row]
-        slot_s = (item['end_time'] - item['start_time']) / 1000.0
-        tts_s = float(item.get('dubbing_s') or 0)
-        return tts_s > slot_s and tts_s > 0, slot_s, tts_s
-
-    def _checked_rows(self):
-        rows = []
-        for row in range(self.table.rowCount()):
-            line_item = self.table.item(row, 0)
-            if line_item and line_item.checkState() == Qt.Checked:
-                rows.append(row)
-        return rows
-
-    def _set_passage_busy(self, busy):
-        self.btn_select_exceeded.setEnabled(not busy)
-        self.btn_rewrite_passage.setEnabled(not busy)
-        # Keep the dialog open while rewrite/re-dub runs; closing early deletes the cache folder.
-        if hasattr(self, 'save_button') and self.save_button:
-            self.save_button.setEnabled(not busy)
-        if not busy:
-            self.btn_rewrite_passage.setText(tr("Rewrite this passage"))
-
-    def _select_exceeded_lines(self):
-        self.stop_countdown()
-        if not getattr(self, 'table', None):
-            return
-        checked = 0
-        self.table.blockSignals(True)
-        try:
-            for row in range(self.table.rowCount()):
-                line_item = self.table.item(row, 0)
-                if not line_item:
-                    continue
-                overrun, _, _ = self._line_overrun(row)
-                line_item.setCheckState(Qt.Checked if overrun else Qt.Unchecked)
-                if overrun:
-                    checked += 1
-        finally:
-            self.table.blockSignals(False)
-        if checked == 0:
-            QMessageBox.information(self, tr("Select exceeded lines"), tr("No exceeded lines"))
-
-    def _passage_error(self, msg):
-        QMessageBox.information(self, tr("Rewrite this passage"), msg)
-
-    def _current_translate_type(self):
-        from videotrans.configure.config import params
-        from videotrans.translator._constants import AI_TRANS_CHANNELS, ID_NAME_DICT
-        combo = getattr(self.parent, 'translate_type', None)
-        if combo is None:
-            self._passage_error(tr("Passage rewrite needs an AI chat channel"))
-            return None
-        translate_type = int(combo.currentIndex())
-        if translate_type not in AI_TRANS_CHANNELS:
-            self._passage_error(tr("Passage rewrite needs an AI chat channel"))
-            return None
-        provider = ID_NAME_DICT.get(translate_type)
-        if provider and provider.key_name and not params.get(provider.key_name):
-            self._passage_error(tr("Please configure the API key of the translation channel first"))
-            return None
-        return translate_type
-
-    def _passage_seeds(self):
-        rows = self._checked_rows()
-        if rows:
-            return rows
-        row = self.table.currentRow() if getattr(self, 'table', None) else -1
-        return [row] if row >= 0 else []
-
-    def _row_text(self, row):
-        text_item = self.table.item(row, 6)
-        if text_item:
-            return text_item.text().strip()
-        return (self.queue_tts[row].get('text') or '').strip()
-
-    def _build_passage_spans(self, seeds):
-        times = [
-            (int(item['start_time']), int(item['end_time']))
-            for item in self.queue_tts
-        ]
-        spans = []
-        for lo, hi in expand_passage_spans(times, seeds):
-            rows = list(range(lo, hi + 1))
-            dubbed = [self._row_text(row) for row in rows]
-            if not any(dubbed):
-                continue
-            source = [(self.queue_tts[row].get('ref_text') or '').strip() for row in rows]
-            tts_total = sum(float(self.queue_tts[row].get('dubbing_s') or 0) for row in rows)
-            start_ms, end_ms = times[lo][0], times[hi][1]
-            window_s = max((end_ms - start_ms) / 1000.0, 0.1)
-            spans.append({
-                'rows': rows,
-                'dubbed': dubbed,
-                'source': source,
-                'start_ms': start_ms,
-                'end_ms': end_ms,
-                'window_s': window_s,
-                'target_chars': passage_target_chars(dubbed, tts_total, window_s),
-            })
-        return spans
-
-    def _rewrite_passage(self):
-        self.stop_countdown()
-        if not getattr(self, 'table', None):
-            return
-        seeds = self._passage_seeds()
-        if not seeds:
-            self._passage_error(tr("Select a subtitle line"))
-            return
-        translate_type = self._current_translate_type()
-        if translate_type is None:
-            return
-        spans = self._build_passage_spans(seeds)
-        if not spans:
-            self._passage_error(tr("Select a subtitle line"))
-            return
-        self._set_passage_busy(True)
-        self.btn_rewrite_passage.setText(tr("Rewriting passage..."))
-        self._rewrite_thread = PassageRewrite(parent=self, spans=spans, translate_type=translate_type)
-        self._rewrite_thread.finished_ok.connect(self._on_passage_ready)
-        self._rewrite_thread.failed.connect(self._on_passage_failed)
-        self._rewrite_thread.start()
-
-    def _format_passage_preview(self, results):
-        blocks = []
-        for span in results:
-            start = self._ms_to_fmt(span['start_ms'])
-            end = self._ms_to_fmt(span['end_ms'])
-            old_chars = sum(len(text or '') for text in span['dubbed'])
-            new_chars = sum(len(text or '') for text in span['new_lines'])
-            blocks.append(
-                f"{start} --> {end}  ({span['window_s']:.1f}s)\n"
-                f"{tr('Original')} ({old_chars})\n{_format_numbered(span['dubbed'])}\n\n"
-                f"{tr('Rewritten')} ({new_chars})\n{_format_numbered(span['new_lines'])}"
-            )
-        return "\n\n----------\n\n".join(blocks)
-
-    def _confirm_passage(self, results):
-        dlg = QDialog(self)
-        dlg.setWindowTitle(tr("Rewrite this passage"))
-        dlg.setMinimumSize(720, 480)
-        layout = QVBoxLayout(dlg)
-        note = QLabel(tr("The passage start and end stay the same. Apply updates the text; Continue re-dubs with the main pipeline."))
-        note.setWordWrap(True)
-        layout.addWidget(note)
-        view = QTextEdit()
-        view.setReadOnly(True)
-        view.setPlainText(self._format_passage_preview(results))
-        layout.addWidget(view)
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel = QPushButton(tr("Cancel"))
-        apply = QPushButton(tr("Apply rewrite"))
-        cancel.clicked.connect(dlg.reject)
-        apply.clicked.connect(dlg.accept)
-        buttons.addWidget(cancel)
-        buttons.addWidget(apply)
-        layout.addLayout(buttons)
-        return dlg.exec() == QDialog.DialogCode.Accepted
-
-    def _clear_line_audio(self, row):
-        """Drop old audio so Continue can re-dub this line in the main pipeline."""
-        from videotrans.configure._paths import DUBBING_CACHE
-        item = self.queue_tts[row]
-        filename = item.get('filename') or ''
-        if filename:
-            Path(filename).parent.mkdir(parents=True, exist_ok=True)
-            try:
-                Path(filename).unlink(missing_ok=True)
-                Path(f"{filename}.mp3").unlink(missing_ok=True)
-                cache_name = Path(filename).name.split('-')[-1]
-                Path(f"{DUBBING_CACHE}/{cache_name}").unlink(missing_ok=True)
-            except OSError as e:
-                logger.warning(e)
-        item['dubbing_s'] = 0.0
-        item['need_redub'] = True
-
-    def _apply_passage_line(self, row, start_ms, end_ms, text):
-        item = self.queue_tts[row]
-        item['text'] = text
-        item['start_time'] = int(start_ms)
-        item['end_time'] = int(end_ms)
-        item['startraw'] = self._ms_to_fmt(start_ms)
-        item['endraw'] = self._ms_to_fmt(end_ms)
-        if 'start_time_source' in item:
-            item['start_time_source'] = int(start_ms)
-        if 'end_time_source' in item:
-            item['end_time_source'] = int(end_ms)
-        item['_duration'] = (end_ms - start_ms) / 1000.0
-        self._clear_line_audio(row)
-        axis = self.table.item(row, 1)
-        if axis:
-            axis.setText(
-                f"{item['startraw']}->{item['endraw']} ({item['_duration']:.3f}s)"
-            )
-        start_item = self.table.item(row, 3)
-        if start_item:
-            start_item.setText(f"{start_ms / 1000.0}")
-        end_item = self.table.item(row, 4)
-        if end_item:
-            end_item.setText(f"{end_ms / 1000.0}")
-        text_item = self.table.item(row, 6)
-        if text_item:
-            text_item.setText(text)
-        self._refresh_row(row)
-
-    def _on_passage_ready(self, results):
-        if not results or not self._confirm_passage(results):
-            self._set_passage_busy(False)
-            return
-        self.table.blockSignals(True)
-        try:
-            for span in results:
-                times = split_passage_times(span['start_ms'], span['end_ms'], span['new_lines'])
-                for row, (start_ms, end_ms), text in zip(span['rows'], times, span['new_lines']):
-                    self._apply_passage_line(row, start_ms, end_ms, text)
-        finally:
-            self.table.blockSignals(False)
-        self._set_passage_busy(False)
-        # Do not re-dub here. Continue runs the same main-pipeline tts.run as the first dubbing.
-        QMessageBox.information(
-            self,
-            tr("Rewrite this passage"),
-            tr("Passage text updated. Click Continue to re-dub with the main dubbing step."),
-        )
-
-    def _on_passage_failed(self, msg):
-        self._set_passage_busy(False)
-        if msg == 'channel':
-            msg = tr("Passage rewrite needs an AI chat channel")
-        elif msg == 'empty':
-            msg = tr("Passage rewrite failed")
-        self._passage_error(msg)
 
     def _show_error(self, msg):
         """显示错误"""
@@ -1527,13 +1026,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             self.stop_button = None
 
     def save_and_close(self):
-        if self._batch_redub or (self._rewrite_thread and self._rewrite_thread.isRunning()):
-            QMessageBox.information(
-                self,
-                tr("Rewrite this passage"),
-                tr("Wait until rewriting or re-dubbing finishes before continuing."),
-            )
-            return
         self.stop_countdown()
         Path(REDUBB_STATUS_FILE).write_text("end")
         self._release_media()
