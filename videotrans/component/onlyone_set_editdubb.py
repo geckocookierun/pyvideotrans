@@ -1383,7 +1383,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         dlg.setWindowTitle(tr("Rewrite this passage"))
         dlg.setMinimumSize(720, 480)
         layout = QVBoxLayout(dlg)
-        note = QLabel(tr("The passage start and end stay the same. Apply replaces the lines and re-dubs them."))
+        note = QLabel(tr("The passage start and end stay the same. Apply updates the text; Continue re-dubs with the main pipeline."))
         note.setWordWrap(True)
         layout.addWidget(note)
         view = QTextEdit()
@@ -1401,6 +1401,23 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         layout.addLayout(buttons)
         return dlg.exec() == QDialog.DialogCode.Accepted
 
+    def _clear_line_audio(self, row):
+        """Drop old audio so Continue can re-dub this line in the main pipeline."""
+        from videotrans.configure._paths import DUBBING_CACHE
+        item = self.queue_tts[row]
+        filename = item.get('filename') or ''
+        if filename:
+            Path(filename).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                Path(filename).unlink(missing_ok=True)
+                Path(f"{filename}.mp3").unlink(missing_ok=True)
+                cache_name = Path(filename).name.split('-')[-1]
+                Path(f"{DUBBING_CACHE}/{cache_name}").unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning(e)
+        item['dubbing_s'] = 0.0
+        item['need_redub'] = True
+
     def _apply_passage_line(self, row, start_ms, end_ms, text):
         item = self.queue_tts[row]
         item['text'] = text
@@ -1413,6 +1430,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         if 'end_time_source' in item:
             item['end_time_source'] = int(end_ms)
         item['_duration'] = (end_ms - start_ms) / 1000.0
+        self._clear_line_audio(row)
         axis = self.table.item(row, 1)
         if axis:
             axis.setText(
@@ -1433,18 +1451,21 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         if not results or not self._confirm_passage(results):
             self._set_passage_busy(False)
             return
-        rows = []
         self.table.blockSignals(True)
         try:
             for span in results:
                 times = split_passage_times(span['start_ms'], span['end_ms'], span['new_lines'])
                 for row, (start_ms, end_ms), text in zip(span['rows'], times, span['new_lines']):
                     self._apply_passage_line(row, start_ms, end_ms, text)
-                    rows.append(row)
         finally:
             self.table.blockSignals(False)
-        # One tts.run for the whole passage — same path as main dubbing.
-        self._start_batch_redub(rows)
+        self._set_passage_busy(False)
+        # Do not re-dub here. Continue runs the same main-pipeline tts.run as the first dubbing.
+        QMessageBox.information(
+            self,
+            tr("Rewrite this passage"),
+            tr("Passage text updated. Click Continue to re-dub with the main dubbing step."),
+        )
 
     def _on_passage_failed(self, msg):
         self._set_passage_busy(False)

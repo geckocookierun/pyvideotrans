@@ -136,6 +136,34 @@ class Worker(QThread):
                     trk.cfg.remove_silent_mid=app_cfg.onlyone_remove_silent_mid
                     trk.cfg.align_sub_audio=app_cfg.onlyone_align_sub_audio
 
+                    # Passage rewrite only updates text and deletes audio. Re-dub missing
+                    # lines here with the same tts.run path as the first dubbing step.
+                    need_redub = [
+                        it for it in trk.queue_tts
+                        if (it.get('text') or '').strip() and not vail_file(it.get('filename'))
+                    ]
+                    if need_redub:
+                        from videotrans import tts as tts_mod
+                        self._post(text=tr("Re-dubbing after subtitle rewrite..."))
+                        Path(trk.cfg.cache_folder).mkdir(parents=True, exist_ok=True)
+                        tts_mod.run(
+                            queue_tts=trk.queue_tts,
+                            language=trk.cfg.target_language_code,
+                            uuid=self.uuid,
+                            tts_type=trk.cfg.tts_type,
+                            is_cuda=trk.cfg.is_cuda,
+                        )
+                        for it in trk.queue_tts:
+                            if self._exit(): return
+                            it['dubbing_s'] = (
+                                len(AudioSegment.from_file(it['filename']))
+                                if vail_file(it.get('filename')) else 0
+                            ) / 1000.0
+                            it.pop('need_redub', None)
+                        Path(f'{trk.cfg.cache_folder}/queue_tts.json').write_text(
+                            json.dumps(trk.queue_tts, ensure_ascii=False), encoding='utf-8'
+                        )
+
             if self._exit(): return
             trk.align()
 
