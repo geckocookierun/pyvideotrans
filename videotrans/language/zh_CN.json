@@ -674,6 +674,7 @@
   "Cancel": "取消",
   "Apply rewrite": "应用改写",
   "Passage rewrite failed": "改写这一段失败，AI 渠道没有返回可用的叙述",
+  "Wait until rewriting or re-dubbing finishes before continuing.": "请等改写或重新配音完成后再继续",
   "Detection microphone": "检测麦克风",
   "whisperx-tips": "请部署并启动 whisperx-api 项目，并在api地址框中填写 http://127.0.0.1:9092\n具体安装使用方法请点击 【查看填写教程】 \nwhisperx-api项目地址:  https://github.com/jianchang512/whisperx-api",
   "Retry failed": "重试失败",

@@ -1138,8 +1138,11 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
 
     def _prepare_redub_job(self, row):
         """Delete old audio and build one TTS job for this row."""
+        filename = self.queue_tts[row]['filename']
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         try:
-            Path(self.queue_tts[row]['filename']).unlink(missing_ok=True)
+            Path(filename).unlink(missing_ok=True)
+            Path(f"{filename}.mp3").unlink(missing_ok=True)
         except OSError as e:
             logger.warning(e)
         self.queue_tts[row]['dubbing_s'] = 0.0
@@ -1167,7 +1170,8 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         job = self._prepare_redub_job(row)
         tts_dict = job['tts_dict']
         if int(tts_dict['tts_type']) not in tts.LOCAL_BUILTIN:
-            self._batch_redub = False
+            self._batch_redub = True
+            self._set_passage_busy(True)
             self.task = BatchReDubb(parent=self, jobs=[job], language=self.language)
             self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
             self.task.start()
@@ -1253,6 +1257,9 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
     def _set_passage_busy(self, busy):
         self.btn_select_exceeded.setEnabled(not busy)
         self.btn_rewrite_passage.setEnabled(not busy)
+        # Keep the dialog open while rewrite/re-dub runs; closing early deletes the cache folder.
+        if hasattr(self, 'save_button') and self.save_button:
+            self.save_button.setEnabled(not busy)
         if not busy:
             self.btn_rewrite_passage.setText(tr("Rewrite this passage"))
 
@@ -1499,6 +1506,13 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             self.stop_button = None
 
     def save_and_close(self):
+        if self._batch_redub or (self._rewrite_thread and self._rewrite_thread.isRunning()):
+            QMessageBox.information(
+                self,
+                tr("Rewrite this passage"),
+                tr("Wait until rewriting or re-dubbing finishes before continuing."),
+            )
+            return
         self.stop_countdown()
         Path(REDUBB_STATUS_FILE).write_text("end")
         self._release_media()

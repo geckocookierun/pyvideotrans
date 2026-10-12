@@ -671,6 +671,7 @@
   "Cancel": "Cancel",
   "Apply rewrite": "Apply rewrite",
   "Passage rewrite failed": "Passage rewrite failed. The AI channel returned no usable narration.",
+  "Wait until rewriting or re-dubbing finishes before continuing.": "Wait until rewriting or re-dubbing finishes before continuing.",
   "Detection microphone": "Detect Microphone",
   "whisperx-tips": "Deploy and launch whisperx-api service, then set API URL to http://127.0.0.1:9092\nClick 'View Setup Guide' for installation instructions.\nRepository: https://github.com/jianchang512/whisperx-api",
   "Retry failed": "Retry Failed",
