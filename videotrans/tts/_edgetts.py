@@ -147,22 +147,6 @@ class EdgeTTS(BaseTTS):
         _control_obj.lock = asyncio.Lock()
         _control_obj.ends_counter = 0
         total_tasks = len(self.queue_tts)
-        if total_tasks == 1:
-            communicate = Communicate(
-                self.queue_tts[0]['text'],
-                voice=get_edge_rolelist(self.queue_tts[0]['role'], self.language),
-                rate=self.rate,
-                volume=self.volume,
-                proxy=_control_obj.useproxy,
-                pitch=self.pitch,
-                connect_timeout=5
-            )
-            mp3_path = self.queue_tts[0]['filename'] + ".mp3"
-            await communicate.save(mp3_path)
-            if vail_file(mp3_path):
-                self.convert_to_wav(mp3_path, self.queue_tts[0]['filename'])
-            return
-
         logger.debug(
             f'本次EdgeTTS配音：重试延迟:{RETRY_DELAY},出错将重试:{RETRY_NUMS},并发:{MAX_CONCURRENT_TASKS}, 代理:{_control_obj.useproxy}')
 
