@@ -78,25 +78,30 @@ class ReDubb(QThread):
             msg = f'error:{except_msg}:\n' + traceback.format_exc()
             self.uito.emit(msg)
 
-# 非本地，直接一个重新配音起一个配音任务
-class ReDubbNolocal(QThread):
+# 非本地：一次 tts.run 配多行，复用主流程配音逻辑（Edge-TTS 并发+重试）
+class BatchReDubb(QThread):
     uito = Signal(str)
 
-    def __init__(self, *, parent=None, idx=None, tts_dict=None, language=None):
+    def __init__(self, *, parent=None, jobs=None, language=None):
         super().__init__(parent=parent)
-        self.tts_dict = tts_dict
+        # jobs: [{'row': int, 'tts_dict': dict}, ...]
+        self.jobs = jobs or []
         self.language = language
-        self.idx = idx
 
     def run(self):
         try:
+            if not self.jobs:
+                self.uito.emit('error:empty')
+                return
+            queue_tts = [job['tts_dict'] for job in self.jobs]
             tts.run(
-                queue_tts=[self.tts_dict],
+                queue_tts=queue_tts,
                 language=self.language,
-                tts_type=self.tts_dict['tts_type'],
-                is_cuda=app_cfg.onlyone_is_cuda
+                tts_type=int(queue_tts[0]['tts_type']),
+                is_cuda=app_cfg.onlyone_is_cuda,
             )
-            self.uito.emit(f"ok:{self.idx}")
+            rows = ','.join(str(job['row']) for job in self.jobs)
+            self.uito.emit(f'ok:{rows}')
         except Exception as e:
             from videotrans.configure.excepts import get_msg_from_except
             except_msg = get_msg_from_except(e)
@@ -107,7 +112,6 @@ class ReDubbNolocal(QThread):
 PASSAGE_GAP_MS = 2500
 PASSAGE_CPS_FALLBACK = 18.0
 PASSAGE_CHAR_HEADROOM = 0.92
-BATCH_REDUB_DELAY_MS = 2000
 
 
 def expand_passage_spans(times, seeds):
@@ -345,7 +349,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self._audio_playing = False
         self.queue_tts = []
         self._rewrite_thread = None
-        self._redub_queue = []
         self._batch_redub = False
 
         # 任务
@@ -1133,94 +1136,101 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             video_end_ms=int(item['end_time']),
         )
 
-    def _redub(self, row):
-        """重配音"""
-        self.stop_countdown()
-        
-        # 删除旧文件
+    def _prepare_redub_job(self, row):
+        """Delete old audio and build one TTS job for this row."""
         try:
             Path(self.queue_tts[row]['filename']).unlink(missing_ok=True)
         except OSError as e:
             logger.warning(e)
-        
-        # 重置时长
         self.queue_tts[row]['dubbing_s'] = 0.0
-        self._refresh_row(row,msg=f'{tr("Re-dubbed")}...')
-        
-        # 获取当前文本
+        self._refresh_row(row, msg=f'{tr("Re-dubbed")}...')
         text_item = self.table.item(row, 6)
         current_text = text_item.text() if text_item else self.queue_tts[row]['text']
-        
-        # 准备TTS参数
         tts_dict = self.queue_tts[row].copy()
         tts_dict['text'] = current_text
+        return {'row': row, 'tts_dict': tts_dict}
+
+    def _start_batch_redub(self, rows):
+        """Re-dub many lines in one tts.run call, same path as main dubbing."""
+        jobs = [self._prepare_redub_job(row) for row in rows]
+        if not jobs:
+            self._set_passage_busy(False)
+            return
+        self._batch_redub = True
+        self.task = BatchReDubb(parent=self, jobs=jobs, language=self.language)
+        self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
+        self.task.start()
+
+    def _redub(self, row):
+        """重配音 — 单行也走主流程同款 tts.run（非本地）或本地 ReDubb 队列。"""
+        self.stop_countdown()
+        job = self._prepare_redub_job(row)
+        tts_dict = job['tts_dict']
         if int(tts_dict['tts_type']) not in tts.LOCAL_BUILTIN:
-            self.task = ReDubbNolocal(parent=self, idx=row,tts_dict=tts_dict, language=self.language)
+            self._batch_redub = False
+            self.task = BatchReDubb(parent=self, jobs=[job], language=self.language)
             self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
             self.task.start()
-        else:
-            _REDUBB_QUEUE[tts_dict['filename']]=tts_dict
-            _FILENAME_ROW_MAP[tts_dict['filename']]=row
-            try:
-                atomic_write_json([it for it in _REDUBB_QUEUE.values()],REDUBB_QUEUE_FILE)
-            except (OSError,PermissionError):
-                _retry=0
-                while 1:
-                    # 可能遇到权限失败或读写冲突
-                    if _retry>5:
-                        raise
-                    try:
-                        Path(REDUBB_QUEUE_FILE).write_text(json.dumps([it for it in _REDUBB_QUEUE.values()]),encoding='utf-8')
-                    except (OSError,PermissionError):
-                        _retry+=1
-                        time.sleep(round(random.random()*3.5,1))
-                    else:
-                        break
-            # 启动后台线程
-            if not self.task:
-                self.task = ReDubb(parent=self, tts_dict=tts_dict, language=self.language)
-                self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
-                self.task.start()
+            return
 
+        _REDUBB_QUEUE[tts_dict['filename']] = tts_dict
+        _FILENAME_ROW_MAP[tts_dict['filename']] = row
+        try:
+            atomic_write_json([it for it in _REDUBB_QUEUE.values()], REDUBB_QUEUE_FILE)
+        except (OSError, PermissionError):
+            _retry = 0
+            while 1:
+                if _retry > 5:
+                    raise
+                try:
+                    Path(REDUBB_QUEUE_FILE).write_text(
+                        json.dumps([it for it in _REDUBB_QUEUE.values()]), encoding='utf-8'
+                    )
+                except (OSError, PermissionError):
+                    _retry += 1
+                    time.sleep(round(random.random() * 3.5, 1))
+                else:
+                    break
+        if not self.task:
+            self.task = ReDubb(parent=self, tts_dict=tts_dict, language=self.language)
+            self.task.uito.connect(self._on_redub_finished, type=Qt.ConnectionType.QueuedConnection)
+            self.task.start()
+
+    def _refresh_redub_row(self, idx):
+        if idx < 0 or idx >= len(self.queue_tts):
+            return None
+        item = self.queue_tts[idx]
+        try:
+            if Path(item['filename']).exists():
+                item['dubbing_s'] = len(AudioSegment.from_file(item['filename'])) / 1000.0
+            else:
+                item['dubbing_s'] = 0.0
+        except Exception:
+            item['dubbing_s'] = 0.0
+        self._refresh_row(idx)
+        return item
 
     def _on_redub_finished(self, msg):
-        """重配音完成回调"""
+        """重配音完成回调 — 支持 ok:3 或 ok:0,1,2,3"""
         if msg.startswith("ok:"):
             try:
-                idx = int(msg[3:])
-            except (ValueError,TypeError,IndexError):
+                idxs = [int(part) for part in msg[3:].split(',') if part.strip() != '']
+            except (ValueError, TypeError, IndexError):
                 return
-            if idx < 0 or idx >= len(self.queue_tts):
-                return
-            item = self.queue_tts[idx]
-            
-            # 读取新文件时长
-            try:
-                if Path(item['filename']).exists():
-                    item['dubbing_s'] = len(AudioSegment.from_file(item['filename'])) / 1000.0
-                else:
-                    item['dubbing_s'] = 0.0
-            except Exception:
-                item['dubbing_s'] = 0.0
-            
-            # 更新状态显示
-            self._refresh_row(idx)
-
-            if self._batch_redub:
-                # Edge-TTS often returns NoAudioReceived when requests are back-to-back.
-                delay_ms = BATCH_REDUB_DELAY_MS if self._redub_queue else 0
-                QTimer.singleShot(delay_ms, self._redub_next)
-                return
-            
-            # 播放新音频 + video segment
-            self._play_with_video(
-                audio_path=item['filename'],
-                video_start_ms=item['start_time'],
-                video_end_ms=item['end_time'],
-            )
+            last_item = None
+            for idx in idxs:
+                item = self._refresh_redub_row(idx)
+                if item is not None:
+                    last_item = item
+            self._batch_redub = False
+            self._set_passage_busy(False)
+            if last_item and len(idxs) == 1:
+                self._play_with_video(
+                    audio_path=last_item['filename'],
+                    video_start_ms=last_item['start_time'],
+                    video_end_ms=last_item['end_time'],
+                )
         else:
-            # 崩溃停止任务
-            self._redub_queue = []
             self._batch_redub = False
             self._set_passage_busy(False)
             Path(REDUBB_STATUS_FILE).write_text('end')
@@ -1285,13 +1295,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             self._passage_error(tr("Please configure the API key of the translation channel first"))
             return None
         return translate_type
-
-    def _redub_next(self):
-        if not self._redub_queue:
-            self._batch_redub = False
-            self._set_passage_busy(False)
-            return
-        self._redub(self._redub_queue.pop(0))
 
     def _passage_seeds(self):
         rows = self._checked_rows()
@@ -1433,9 +1436,8 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
                     rows.append(row)
         finally:
             self.table.blockSignals(False)
-        self._redub_queue = rows
-        self._batch_redub = True
-        self._redub_next()
+        # One tts.run for the whole passage — same path as main dubbing.
+        self._start_batch_redub(rows)
 
     def _on_passage_failed(self, msg):
         self._set_passage_busy(False)
