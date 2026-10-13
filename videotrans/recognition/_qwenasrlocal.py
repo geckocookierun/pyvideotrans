@@ -54,9 +54,11 @@ class QwenasrlocalRecogn(BaseRecogn):
         if self._exit(): return
         align_language=("zh","zh-cn","zh-tw","en","ja",'ko','yue','fr','es','es-419','it','de','pt','pt-br','pt-pt','ru')
 
-        logs_file = f'{config.TEMP_DIR}/{self.uuid}/qwen3asrlocal-{time.time()}.log'
+        work_dir = self.cache_folder or f'{config.TEMP_DIR}/{self.uuid}'
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        logs_file = f'{work_dir}/qwen3asrlocal-{time.time()}.log'
         title = f"Qwen3-ASR {self.model_name}"
-        cut_audio_list_file = f'{config.TEMP_DIR}/{self.uuid}/cut_audio_list_{time.time()}.json'
+        cut_audio_list_file = f'{work_dir}/cut_audio_list_{time.time()}.json'
 
         if self.detect_language not in align_language:
             # 不支持对齐时间戳 需切片

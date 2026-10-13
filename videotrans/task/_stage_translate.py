@@ -28,17 +28,54 @@ class TranslateMixin:
         rawsrt = get_subtitle_from_srt(self.cfg.source_sub, is_file=True)
         self.signal(text=tr('kaishitiquhefanyi'))
 
-        target_srt = run_trans(
-            translate_type=self.cfg.translate_type,
-            text_list=copy.deepcopy(rawsrt),
-            uuid=self.uuid,
-            source_code=self.cfg.source_language_code,
-            target_code=self.cfg.target_language_code,
-            is_cuda=self.cfg.is_cuda
-        )
+        narration_mode = getattr(self.cfg, 'narration_mode', None)
+        if narration_mode in ('line_third', 'line_first'):
+            narration_mode = 'line'
+        if narration_mode not in ('none', 'third', 'first', 'line'):
+            narration_mode = 'third' if getattr(self.cfg, 'third_person_narration', False) else 'none'
+        # line = same scene pipeline as third-person (incl. retime), prompt forces 1:1 lines.
+        use_scene_narration = narration_mode in ('third', 'first', 'line')
+        one_to_one = narration_mode == 'line'
+        narration_style = getattr(self.cfg, 'narration_style', None)
+        if narration_style not in ('third', 'first'):
+            narration_style = 'first' if narration_mode == 'first' else 'third'
+        if one_to_one:
+            narration_style = 'third'
+        if use_scene_narration:
+            from videotrans.translator._narration import run_third_person_narration
+            if one_to_one:
+                status = tr('Line-by-line rewrite...')
+            elif narration_style == 'first':
+                status = tr('First-person narration rewriting...')
+            else:
+                status = tr('Third-person narration rewriting...')
+            self.signal(text=status)
+            target_srt = run_third_person_narration(
+                text_list=copy.deepcopy(rawsrt),
+                translate_type=self.cfg.translate_type,
+                source_code=self.cfg.source_language_code,
+                target_code=self.cfg.target_language_code,
+                voice_role=getattr(self.cfg, 'voice_role', '') or '',
+                voice_rate=getattr(self.cfg, 'voice_rate', '+0%') or '+0%',
+                cache_folder=getattr(self.cfg, 'cache_folder', '') or '',
+                uuid=self.uuid,
+                narration_style=narration_style,
+                one_to_one=one_to_one,
+            )
+        else:
+            target_srt = run_trans(
+                translate_type=self.cfg.translate_type,
+                text_list=copy.deepcopy(rawsrt),
+                uuid=self.uuid,
+                source_code=self.cfg.source_language_code,
+                target_code=self.cfg.target_language_code,
+                is_cuda=self.cfg.is_cuda
+            )
         if self._exit():  return
 
-        target_srt = self.check_target_sub(rawsrt, target_srt)
+        # Scene / 1:1 narration rebuild timestamps; normal translate keeps source timing.
+        if not use_scene_narration:
+            target_srt = self.check_target_sub(rawsrt, target_srt)
         # 删除原字幕标点
         if self.cfg.fix_punc==2:
             for it in rawsrt:
@@ -54,7 +91,8 @@ class TranslateMixin:
 
         if self.cfg.app_mode=='tiqu':
             shutil.copy2(self.cfg.source_sub, f"{self.cfg.target_dir}/{self.cfg.noextname}-{self.cfg.source_language_code}.srt")
-            if self.cfg.output_srt > 0 and self.cfg.source_language_code != self.cfg.target_language_code:
+            # Bilingual merge assumes 1:1 lines; skip when scene narration changed cue count.
+            if (not use_scene_narration) and self.cfg.output_srt > 0 and self.cfg.source_language_code != self.cfg.target_language_code:
                 _source_srt_len = len(rawsrt)
                 for i, it in enumerate(target_srt):
                     if i < _source_srt_len and self.cfg.output_srt == 1:

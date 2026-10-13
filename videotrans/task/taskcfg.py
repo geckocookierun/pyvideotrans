@@ -207,6 +207,9 @@ class TaskCfgTTS(TaskCfgBase):
 class TaskCfgSTS(TaskCfgBase):
     ######## 字幕翻译相关
     translate_type: int = None  # 字幕翻译渠道
+    third_person_narration: bool = False  # scene narration on (third or first)
+    narration_mode: str = 'none'  # none | third | first
+    narration_style: str = 'third'  # third | first (when narration on)
 
     def __repr__(self):
         _msg = []
@@ -215,7 +218,7 @@ class TaskCfgSTS(TaskCfgBase):
         _msg.append(f'[TaskCfgSTS]')
         _msg.append(f'原始输入文件名: {self.name}, \n输出结果保存到文件夹: {self.target_dir}')
         _msg.append(
-            f"{tr('Translate channel')}:{get_tanslate_type(self.translate_type)},原始语言:{self.source_language_code},目标语言:{self.target_language_code}, {isTrue[settings['aisendsrt']]} {tr('Send SRT')}")
+            f"{tr('Translate channel')}:{get_tanslate_type(self.translate_type)},原始语言:{self.source_language_code},目标语言:{self.target_language_code}, {isTrue[settings['aisendsrt']]} {tr('Send SRT')}, narration={getattr(self, 'narration_mode', 'none') or ('third' if self.third_person_narration else 'none')}")
         if app_cfg.proxy:
             _msg.append(f'代理地址:{app_cfg.proxy}')
         return "\n".join(_msg)
@@ -231,6 +234,9 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     novoice_mp4: Union[os.PathLike, str] = None  # 从原始视频分离出的无声视频
     is_separate: bool = False  # 是否进行人声、背景音分离
     embed_bgm: bool = True  # 是否需要重新嵌入背景音
+    keep_original_audio: bool = False  # 不分离：降低原声后与配音叠加
+    original_audio_volume: float = 0.3  # 原声叠加音量倍数
+    original_wav: Union[os.PathLike, str] = None  # 用于叠加的原始音轨(立体声)
     instrument: Union[os.PathLike, str] = None  # 分离出的背景音频
     vocal: Union[os.PathLike, str] = None  # 分离出的人声音频
     clear_cache: bool = False  # 是否清理已存在的文件
@@ -316,6 +322,10 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
 
             _vocal_exists = self.vocal and Path(self.vocal).exists()
             _instr_exists = self.instrument and Path(self.instrument).exists()
+            if self.keep_original_audio:
+                _msg.append(
+                    f'已选 保留原声叠加, 原声音量{self.original_audio_volume}'
+                )
             if self.is_separate or self.background_music or _vocal_exists or _instr_exists:
 
                 _str = f"{isTrue[self.is_separate]} 分离人声与背景声"

@@ -63,6 +63,22 @@ class PrepareMixin:
                 if not vail_file(self.cfg.vocal) or not vail_file(self.cfg.instrument):
                     self.cfg.is_separate = False
 
+        # Full-quality original track when keep-original is on but UVR vocal is not available.
+        # If Separate Vocal/BGM ran, mix uses vocal.wav instead (cleaner with Re-embed BGM).
+        if (audio_stream_len > 0
+                and getattr(self.cfg, 'keep_original_audio', False)
+                and not vail_file(self.cfg.vocal)
+                and not vail_file(self.cfg.original_wav)):
+            try:
+                runffmpeg([
+                    "-y", "-i", self.cfg.name,
+                    "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le",
+                    self.cfg.original_wav,
+                ])
+            except Exception as e:
+                logger.exception(f'导出原声叠加音轨失败，跳过保留原声 {e}', exc_info=True)
+                self.cfg.keep_original_audio = False
+
         if audio_stream_len > 0 and not vail_file(self.cfg.source_wav) and vail_file(self.cfg.vocal):
             cmd = [
                 "-y",

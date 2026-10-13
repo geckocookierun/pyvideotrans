@@ -161,6 +161,15 @@ class WinActionCheckMixin:
         self.cfg['voice_autorate'] = self.main.voice_autorate.isChecked()
         self.cfg['video_autorate'] = self.main.video_autorate.isChecked()
 
+        self.cfg['keep_original_audio'] = bool(
+            hasattr(self.main, 'keep_original_audio') and self.main.keep_original_audio.isChecked()
+        )
+        try:
+            self.cfg['original_audio_volume'] = float(
+                self.main.original_volume.text()
+            ) if hasattr(self.main, 'original_volume') else 0.3
+        except (TypeError, ValueError):
+            self.cfg['original_audio_volume'] = 0.3
         self.cfg['is_separate'] = self.main.is_separate.isChecked()
         self.cfg['embed_bgm'] = self.main.embed_bgm.isChecked()
         self.cfg['background_music'] = self.main.back_audio.text().strip()
@@ -186,6 +195,25 @@ class WinActionCheckMixin:
             return
 
         self.cfg['rephrase'] = self.main.rephrase.isChecked()
+        narration_mode = 'none'
+        if hasattr(self.main, 'narration_mode'):
+            narration_mode = self.main.narration_mode.currentData() or 'none'
+        elif hasattr(self.main, 'third_person_narration') and hasattr(self.main.third_person_narration, 'isChecked'):
+            narration_mode = 'third' if self.main.third_person_narration.isChecked() else 'none'
+        _ok_modes = ('none', 'third', 'first', 'line')
+        if narration_mode not in _ok_modes:
+            # Migrate removed line_third / line_first → line
+            if narration_mode in ('line_third', 'line_first'):
+                narration_mode = 'line'
+            else:
+                narration_mode = 'none'
+        self.cfg['narration_mode'] = narration_mode
+        self.cfg['third_person_narration'] = narration_mode != 'none'
+        self.cfg['narration_style'] = 'first' if narration_mode == 'first' else 'third'
+        if self.cfg['third_person_narration'] and self.cfg['translate_type'] not in translator.AI_TRANS_CHANNELS:
+            show_error(tr("Third-person narration needs an AI chat channel"))
+            self.main.startbtn.setDisabled(False)
+            return
         self.cfg['is_cuda'] = self.main.enable_cuda.isChecked()
         self.cfg['remove_silent_mid'] = False
         self.cfg['align_sub_audio'] = True
@@ -229,12 +257,11 @@ class WinActionCheckMixin:
         self.cfg['app_mode'] = self.main.app_mode
         self.cfg['output_srt'] = self.main.output_srt.currentIndex()
 
-        if self.main.recogn_type.currentIndex() == recognition.FASTER_WHISPER or self.main.app_mode == 'biaozhun':
-            self.cfg['loop_backaudio'] = self.main.is_loop_bgm.currentIndex()
-            try:
-                self.cfg['backaudio_volume'] = float(self.main.bgmvolume.text())
-            except (TypeError, ValueError):
-                pass
+        self.cfg['loop_backaudio'] = self.main.is_loop_bgm.currentIndex()
+        try:
+            self.cfg['backaudio_volume'] = float(self.main.bgmvolume.text())
+        except (TypeError, ValueError):
+            self.cfg['backaudio_volume'] = 0.8
 
         params.getset_params(self.cfg | {"select_file_type": self.main.select_file_type.isChecked()})
         params.save()

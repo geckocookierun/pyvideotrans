@@ -86,6 +86,21 @@ class Ui_MainWindow(object):
         self.bgmvolume.setToolTip(
             tr("BGM volume is a multiple of the original volume, greater than 1 increases, less than decreases"))
 
+        self.keep_original_audio = QtWidgets.QCheckBox(self.layoutWidget)
+        self.keep_original_audio.setMinimumSize(QtCore.QSize(0, 30))
+        self.keep_original_audio.setObjectName("keep_original_audio")
+        self.keep_original_audio.setVisible(False)
+
+        self.original_volume_label = QtWidgets.QLabel()
+        self.original_volume_label.setText(tr("Original volume"))
+        self.original_volume_label.setVisible(False)
+        self.original_volume = QtWidgets.QLineEdit()
+        self.original_volume.setText('0.3')
+        self.original_volume.setMaximumWidth(60)
+        self.original_volume.setVisible(False)
+        self.original_volume.setToolTip(
+            tr("Original audio volume under the dubbing; less than 1 lowers it, e.g. 0.3"))
+
         self.set_ass = QtWidgets.QPushButton()
         self.set_ass.setText(tr('Modify hard subtitle style'))
         self.set_ass.setCursor(Qt.PointingHandCursor)
@@ -93,6 +108,9 @@ class Ui_MainWindow(object):
 
         self.bgm_layout.addWidget(self.is_separate)
         self.bgm_layout.addWidget(self.embed_bgm)
+        self.bgm_layout.addWidget(self.keep_original_audio)
+        self.bgm_layout.addWidget(self.original_volume_label)
+        self.bgm_layout.addWidget(self.original_volume)
         self.bgm_layout.addWidget(self.is_loop_bgm)
         self.bgm_layout.addWidget(self.bgmvolume_label)
         self.bgm_layout.addWidget(self.bgmvolume)
@@ -354,6 +372,9 @@ class Ui_MainWindow(object):
         self.is_separate.setText(tr("Retain original background sound"))
         self.is_separate.setToolTip(tr(
             "If selected, separate human voice and background sound, and finally output video will embed background sound"))
+        self.keep_original_audio.setText(tr("Keep original audio"))
+        self.keep_original_audio.setToolTip(tr(
+            "Lower original speech and overlay dubbing on top. Can be used with Separate Vocal/BGM + Re-embed BGM: original vocal is ducked, then clean BGM is re-embedded."))
         self.startbtn.setText(tr("Start"))
         self.addbackbtn.setText(tr("Add background audio"))
         self.addbackbtn.setToolTip(

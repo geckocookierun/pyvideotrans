@@ -257,6 +257,7 @@ class AppSettings:
             "max_audio_speed_rate",
             "max_video_pts_rate",
             "min_speech_duration_ms",
+            "min_speech_duration_ms2",
             "max_speech_duration_s",
             "min_silence_duration_ms",
             "trans_thread",

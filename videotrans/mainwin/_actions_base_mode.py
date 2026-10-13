@@ -193,6 +193,8 @@ class WinActionBaseModeMixin:
         self.main.voice_rate.setDisabled(type)
         self.main.is_loop_bgm.setDisabled(type)
         self.main.aisendsrt.setDisabled(type)
+        if hasattr(self.main, 'third_person_narration'):
+            self.main.third_person_narration.setDisabled(type)
         self.main.rephrase.setDisabled(type)
         self.main.remove_silent_mid.setDisabled(type)
         self.main.align_sub_audio.setDisabled(type)
@@ -208,5 +210,8 @@ class WinActionBaseModeMixin:
         self.main.select_file_type.setDisabled(type)
         self.main.is_separate.setDisabled(type)
         self.main.embed_bgm.setDisabled(type)
+        if hasattr(self.main, 'keep_original_audio'):
+            self.main.keep_original_audio.setDisabled(type)
+            self.main.original_volume.setDisabled(type)
         self.main.addbackbtn.setDisabled(True if self.main.app_mode in ['tiqu'] else type)
         self.main.back_audio.setReadOnly(True if self.main.app_mode in ['tiqu'] else type)

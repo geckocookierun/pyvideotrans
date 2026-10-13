@@ -54,12 +54,16 @@ class TransCreate(
     def __post_init__(self):
         super().__post_init__()
         if not self.cfg.cache_folder:
+            # Must stay TEMP_DIR/{uuid}: recogn/TTS still write logs & cut lists there.
+            # Concurrent same-file runs are guarded by unique will_embed/laste_target names.
             self.cfg.cache_folder = f"{config.TEMP_DIR}/{self.uuid}"
+        Path(self.cfg.cache_folder).mkdir(parents=True, exist_ok=True)
         if self.cfg.clear_cache:
             if self.cfg.target_dir and Path(self.cfg.target_dir).is_dir():
                 shutil.rmtree(self.cfg.target_dir, ignore_errors=True)
             if self.cfg.cache_folder and Path(self.cfg.cache_folder).is_dir():
                 shutil.rmtree(self.cfg.cache_folder, ignore_errors=True)
+            Path(self.cfg.cache_folder).mkdir(parents=True, exist_ok=True)
 
         self.signal(text=tr('kaishichuli'))
         self.max_speakers = max(self.cfg.nums_diariz,0) if self.cfg.enable_diariz else -1
@@ -114,6 +118,7 @@ class TransCreate(
 
         self.cfg.vocal = f"{self.cfg.cache_folder}/vocal.wav"
         self.cfg.instrument = f"{self.cfg.cache_folder}/instrument.wav"
+        self.cfg.original_wav = f"{self.cfg.cache_folder}/original_mix.wav"
 
         logger.debug(f"{self=}")
         self.signal(text="forbid", type="disabled_edit")

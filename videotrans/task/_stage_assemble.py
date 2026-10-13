@@ -69,7 +69,9 @@ class AssembleMixin:
             raise VideoTransError(f"{tr('Dubbing')}{tr('anerror')}:{self.cfg.target_wav}")
 
         self.precent = min(max(90, self.precent), 98)
-        target_m4a = self.cfg.cache_folder + "/will_embed.m4a"
+        # Unique names: concurrent jobs must not share will_embed / laste_target.
+        _run_tag = f"{os.getpid()}-{time.time_ns()}"
+        target_m4a = self.cfg.cache_folder + f"/will_embed-{_run_tag}.m4a"
         output_source_output = True
         duration_ms = int(get_video_duration(self.cfg.novoice_mp4))
         if not self.should_dubbing:
@@ -99,17 +101,32 @@ class AssembleMixin:
             threading.Thread(target=_output, daemon=True).start()
             self.signal(text=tr("Check manually added BGM..."))
             self._back_music()
+            # Optional: duck original speech under dubbing (uses vocal.wav if separated).
+            if getattr(self.cfg, 'keep_original_audio', False):
+                self.signal(text=tr("Mixing original audio under dubbing..."))
+                self._keep_original()
+            # Optional: re-embed separated instrument / BGM (can combine with keep-original).
             self.signal(text=tr("Check original BGM..."))
             self._separate()
 
 
-            _cmd=[
+            # If mix/race shortened dub vs video, pad silence before AAC so mux isn't truncated.
+            dub_ms = get_audio_time(self.cfg.target_wav)
+            pad_ms = int(duration_ms) - int(dub_ms)
+            _cmd = [
                 "-y",
                 "-i",
                 os.path.basename(self.cfg.target_wav),
-                "-ac", "2", "-b:a", "128k", "-c:a", "aac",
-                os.path.basename(target_m4a)
             ]
+            if pad_ms > 100:
+                logger.warning(
+                    f"Dub audio shorter than video by {pad_ms}ms; padding before embed"
+                )
+                _cmd.extend(["-af", f"apad=pad_dur={pad_ms / 1000.0}"])
+            _cmd.extend([
+                "-ac", "2", "-ar", "48000", "-b:a", "128k", "-c:a", "aac",
+                os.path.basename(target_m4a),
+            ])
             self.signal(text=tr("Process voiceover for embedding..."))
             runffmpeg(_cmd, cmd_dir=self.cfg.cache_folder)
 
@@ -126,6 +143,10 @@ class AssembleMixin:
 
         audio_ms = get_audio_time(target_m4a)
         a_v_offset=audio_ms-duration_ms
+        if a_v_offset < -100:
+            logger.warning(
+                f"最终合并前音频仍短于视频 {-a_v_offset}ms (audio={audio_ms}, video={duration_ms})"
+            )
         logger.debug(f'最终合并视频前：音频时长 {audio_ms}ms, 视频时长: {duration_ms}ms ' + (f'，音频大于时长 {a_v_offset}ms, 应实现视频末尾定格' if a_v_offset>0 else ''))
         # 中间处理均为 h264, 若最终输出也是264，可直接 copy
         is_copy_mode = str(self.video_codec_num) == '264'
@@ -133,7 +154,7 @@ class AssembleMixin:
         if is_lossless:
             logger.debug(f'当前原始视频是标准264, 输出也是264，未视频慢速，未嵌入硬字幕，实现无损输出。')
 
-        tmp_target_mp4 = self.cfg.cache_folder + f"/laste_target{_video_output_ext}"
+        tmp_target_mp4 = self.cfg.cache_folder + f"/laste_target-{_run_tag}{_video_output_ext}"
         self.signal(text=tr("Video + Subtitles + Dubbing in merge"))
 
         try:
@@ -253,7 +274,17 @@ class AssembleMixin:
                         runffmpeg(cmd0 + cmd1 + subtitle_filter + cmd2 + enc_qua + cmd3,
                                         cmd_dir=self.cfg.cache_folder, force_cpu=True)
         except Exception as e:
-            raise VideoTransError(tr('Error in embedding the final step of the subtitle dubbing')+str(e)) from e
+            err = str(e)
+            if 'No such filter: \'subtitles\'' in err or 'Filter not found' in err:
+                tip = tr(
+                    "Hard subtitles need FFmpeg built with libass (subtitles filter). "
+                    "On macOS install ffmpeg-full: brew install ffmpeg-full, "
+                    "or switch subtitle type to Soft Subtitles."
+                )
+                raise VideoTransError(
+                    tr('Error in embedding the final step of the subtitle dubbing') + tip
+                ) from e
+            raise VideoTransError(tr('Error in embedding the final step of the subtitle dubbing')+err) from e
 
         if Path(tmp_target_mp4).exists():
             try:

@@ -729,21 +729,31 @@ class SpeedRate:
     def _exec_concat_audio(self, file_list):
         if not file_list: return
 
-        concat_txt = Path(self.cache_folder, 'final_audio_concat.txt').as_posix()
+        # Unique names: parallel runs sharing cache_folder used to clobber final_audio_temp.wav.
+        tag = f"{time.time_ns()}-{os.getpid()}"
+        concat_txt = Path(self.cache_folder, f'final_audio_concat-{tag}.txt').as_posix()
         tools.create_concat_txt(file_list, concat_txt=concat_txt)
 
-        temp_wav = Path(self.cache_folder, 'final_audio_temp.wav').as_posix()
-        protxt = f'{self.cache_folder}/concataudio-{time.time()}.txt'
+        temp_wav = Path(self.cache_folder, f'final_audio_temp-{tag}.wav').as_posix()
+        protxt = f'{self.cache_folder}/concataudio-{tag}.txt'
         self.concat_video_is_end=False
         threading.Thread(target=self._hebing_pro, args=(protxt,tr('Concatenating final audio')), daemon=True).start()
-        # 强制使用 cache_folder 作为 cwd，避免相对路径问题
-        cmd = ['-y', "-progress",protxt,'-f', 'concat', '-safe', '0', '-i', concat_txt, '-c:a', 'copy', temp_wav]
+        # Re-encode to 48k stereo so mixed-rate segments cannot lie about duration under -c:a copy.
+        cmd = [
+            '-y', "-progress", protxt, '-f', 'concat', '-safe', '0', '-i', concat_txt,
+            '-ar', str(self.AUDIO_SAMPLE_RATE), '-ac', str(self.AUDIO_CHANNELS),
+            '-c:a', 'pcm_s16le', temp_wav,
+        ]
         tools.runffmpeg(cmd, force_cpu=True, cmd_dir=self.cache_folder)
         self.concat_video_is_end=True
         if Path(temp_wav).exists():
             _last_len = len(AudioSegment.from_file(temp_wav, format="wav"))
             shutil.move(temp_wav, self.target_audio)
             logger.debug(f"音频片段连接后，实际时长 {_last_len}ms, 已生成到: {self.target_audio}")
+            if self.raw_total_time > 0 and _last_len + 100 < self.raw_total_time:
+                logger.warning(
+                    f"Concat audio shorter than video: {_last_len}ms < {self.raw_total_time}ms"
+                )
         else:
             logger.error("音频片段连接失败")
             _last_len = 0

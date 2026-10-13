@@ -3961,6 +3961,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyobjus"
+version = "1.2.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/75/f7ae38607648f9ccb363447b83480fcf0e582c42d62908bbcce05afbe754/pyobjus-1.2.4.tar.gz", hash = "sha256:4877101ff3b70b7fd2b12b2878ab23ee488018ce613f12948b58ff4c7e363388", size = 167844, upload-time = "2025-12-29T14:48:18.514Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/78/e75613faed2f1336d1a2549b5376d80c83f21f0aee6842d6cac91893c8ae/pyobjus-1.2.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:cf261b1388003095199a8f0267f31505573cbceef6ad3e4724be364268b16148", size = 547886, upload-time = "2025-12-29T14:48:05.968Z" },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4427,6 +4436,7 @@ dependencies = [
     { name = "pynini", version = "2.1.6.post1", source = { url = "https://github.com/billwuhao/pynini-windows-wheels/releases/download/v2.1.6.post1/pynini-2.1.6.post1-cp310-cp310-win_amd64.whl" }, marker = "sys_platform == 'win32'" },
     { name = "pynini", version = "2.1.7", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
     { name = "pynndescent" },
+    { name = "pyobjus" },
     { name = "pyparsing" },
     { name = "pyppmd" },
     { name = "pyrubberband" },
@@ -4715,6 +4725,7 @@ requires-dist = [
     { name = "pynini", marker = "sys_platform != 'win32'", specifier = ">=2.1.7" },
     { name = "pynini", marker = "sys_platform == 'win32'", url = "https://github.com/billwuhao/pynini-windows-wheels/releases/download/v2.1.6.post1/pynini-2.1.6.post1-cp310-cp310-win_amd64.whl" },
     { name = "pynndescent", specifier = "==0.5.13" },
+    { name = "pyobjus", specifier = ">=1.2.4" },
     { name = "pyparsing", specifier = "==3.1.1" },
     { name = "pyppmd", specifier = "==1.1.0" },
     { name = "pyrubberband", specifier = ">=0.4.0" },

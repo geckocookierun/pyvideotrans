@@ -145,11 +145,25 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         self.nums_diariz.setCurrentIndex(int(params.get('nums_diariz', 0)))
         self.is_separate.setChecked(bool(params.get('is_separate', False)))
         self.embed_bgm.setChecked(bool(params.get('embed_bgm', True)))
+        if hasattr(self, 'keep_original_audio'):
+            self.keep_original_audio.setChecked(bool(params.get('keep_original_audio', False)))
+            self.original_volume.setText(str(params.get('original_audio_volume', 0.3)))
         self.rephrase.setChecked(bool(params.get('rephrase', False)))
+        if hasattr(self, 'narration_mode'):
+            mode = params.get('narration_mode')
+            if mode in ('line_third', 'line_first'):
+                mode = 'line'
+            if mode not in ('none', 'third', 'first', 'line'):
+                # Migrate old checkbox param.
+                mode = 'third' if params.get('third_person_narration') else 'none'
+            idx = self.narration_mode.findData(mode)
+            self.narration_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        elif hasattr(self, 'third_person_narration') and hasattr(self.third_person_narration, 'setChecked'):
+            self.third_person_narration.setChecked(bool(params.get('third_person_narration', False)))
         self.remove_noise.setChecked(bool(params.get('remove_noise')))
         self.copysrt_rawvideo.setChecked(bool(params.get('copysrt_rawvideo', False)))
-        self.bgmvolume.setText(str(settings.get('backaudio_volume', 0.8)))
-        self.is_loop_bgm.setCurrentIndex(int(settings.get('loop_backaudio', 0)))
+        self.bgmvolume.setText(str(params.get('backaudio_volume', settings.get('backaudio_volume', 0.8))))
+        self.is_loop_bgm.setCurrentIndex(int(params.get('loop_backaudio', settings.get('loop_backaudio', 0))))
 
         _langcode = None
         if _target_language and _target_language in self.languagename:
