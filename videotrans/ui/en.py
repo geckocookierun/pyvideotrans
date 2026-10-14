@@ -106,6 +106,21 @@ class Ui_MainWindow(object):
         self.set_ass.setCursor(Qt.PointingHandCursor)
         self.set_ass.setVisible(False)
 
+        self.cover_source_hardsub = QtWidgets.QCheckBox(self.layoutWidget)
+        self.cover_source_hardsub.setMinimumSize(QtCore.QSize(0, 30))
+        self.cover_source_hardsub.setObjectName("cover_source_hardsub")
+        self.cover_source_hardsub.setVisible(False)
+
+        self.cover_hardsub_pct_label = QtWidgets.QLabel()
+        self.cover_hardsub_pct_label.setText(tr("Cover height"))
+        self.cover_hardsub_pct_label.setVisible(False)
+        self.cover_hardsub_pct = QtWidgets.QLineEdit()
+        self.cover_hardsub_pct.setText('0.14')
+        self.cover_hardsub_pct.setMaximumWidth(60)
+        self.cover_hardsub_pct.setVisible(False)
+        self.cover_hardsub_pct.setToolTip(
+            tr("Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%"))
+
         self.bgm_layout.addWidget(self.is_separate)
         self.bgm_layout.addWidget(self.embed_bgm)
         self.bgm_layout.addWidget(self.keep_original_audio)
@@ -118,6 +133,9 @@ class Ui_MainWindow(object):
         self.bgm_layout.addWidget(self.addbackbtn)
         self.bgm_layout.addWidget(self.back_audio)
         self.bgm_layout.addWidget(self.set_ass)
+        self.bgm_layout.addWidget(self.cover_source_hardsub)
+        self.bgm_layout.addWidget(self.cover_hardsub_pct_label)
+        self.bgm_layout.addWidget(self.cover_hardsub_pct)
 
         self.enable_diariz = QtWidgets.QCheckBox()
         self.enable_diariz.setToolTip(tr("Speaker classification language"))
@@ -375,6 +393,9 @@ class Ui_MainWindow(object):
         self.keep_original_audio.setText(tr("Keep original audio"))
         self.keep_original_audio.setToolTip(tr(
             "Lower original speech and overlay dubbing on top. Can be used with Separate Vocal/BGM + Re-embed BGM: original vocal is ducked, then clean BGM is re-embedded."))
+        self.cover_source_hardsub.setText(tr("Cover source hardsub"))
+        self.cover_source_hardsub.setToolTip(tr(
+            "Black out the bottom band of the source video before burning subtitles, so original burned-in hardsubs do not show under the new ones."))
         self.startbtn.setText(tr("Start"))
         self.addbackbtn.setText(tr("Add background audio"))
         self.addbackbtn.setToolTip(

@@ -57,6 +57,54 @@ class AssembleMixin:
         self.set_end(True)
 
 
+    def _cover_source_hardsub_band(self) -> None:
+        """Blur the bottom band of novoice.mp4 so source burned-in hardsubs are unreadable."""
+        if self._exit() or not getattr(self.cfg, 'cover_source_hardsub', False):
+            return
+        try:
+            pct = float(getattr(self.cfg, 'cover_source_hardsub_pct', 0.14) or 0.14)
+        except (TypeError, ValueError):
+            pct = 0.14
+        pct = min(0.35, max(0.05, pct))
+        src = Path(self.cfg.novoice_mp4)
+        if not src.exists():
+            return
+        self.signal(text=tr("Covering source hardsub area..."))
+        tmp = src.with_name(f'novoice_cover_{os.getpid()}_{time.time_ns()}.mp4')
+        # Crop bottom band → strong blur (+ slight dim) → overlay. Keeps scene look, hides glyphs.
+        # trunc(.../2)*2 keeps even sizes for yuv420p.
+        fc = (
+            f"[0:v]split[base][bot];"
+            f"[bot]crop=iw:trunc(ih*{pct:.4f}/2)*2:0:ih-trunc(ih*{pct:.4f}/2)*2,"
+            f"gblur=sigma=36:steps=4,eq=saturation=0.7[blur];"
+            f"[base][blur]overlay=0:main_h-overlay_h[vout]"
+        )
+        try:
+            runffmpeg([
+                "-y",
+                "-i", src.name,
+                "-filter_complex", fc,
+                "-map", "[vout]",
+                "-an",
+                "-c:v", "libx264",
+                "-preset", str(settings.get('preset', 'fast')),
+                "-crf", str(settings.get('crf', 18)),
+                "-pix_fmt", "yuv420p",
+                tmp.name,
+            ], cmd_dir=self.cfg.cache_folder)
+            if tmp.exists() and tmp.stat().st_size > 0:
+                tmp.replace(src)
+                logger.debug(f'Blurred source hardsub band pct={pct} -> {src}')
+            else:
+                logger.warning('Cover source hardsub produced empty file; keeping original novoice')
+                tmp.unlink(missing_ok=True)
+        except Exception as e:
+            logger.exception(f'Cover source hardsub failed, keep original frame: {e}', exc_info=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _join_video_audio_srt(self) -> None:
         if self._exit() or not self.should_hebing:
             return
@@ -64,6 +112,8 @@ class AssembleMixin:
         is_novoice_mp4(self.cfg.novoice_mp4, self.uuid)
         if not Path(self.cfg.novoice_mp4).exists():
             raise VideoTransError(f'{self.cfg.novoice_mp4} 不存在')
+
+        self._cover_source_hardsub_band()
 
         if self.should_dubbing and not vail_file(self.cfg.target_wav):
             raise VideoTransError(f"{tr('Dubbing')}{tr('anerror')}:{self.cfg.target_wav}")

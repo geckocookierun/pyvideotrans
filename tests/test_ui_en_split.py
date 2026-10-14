@@ -42,6 +42,7 @@ def test_setupUi_creates_key_widgets():
         'set_adv_status', 'label', 'proxy', 'output_srt_label', 'output_srt',
         'is_separate', 'embed_bgm', 'addbackbtn', 'back_audio',
         'is_loop_bgm', 'bgmvolume_label', 'bgmvolume', 'set_ass',
+        'cover_source_hardsub', 'cover_hardsub_pct_label', 'cover_hardsub_pct',
         'enable_diariz', 'fix_punc', 'nums_diariz',
         'label_6', 'voice_rate', 'volume_label', 'volume_rate',
         'pitch_label', 'pitch_rate',

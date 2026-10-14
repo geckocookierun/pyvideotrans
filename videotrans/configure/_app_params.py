@@ -78,6 +78,8 @@ class AppParams:
             "original_audio_volume": 0.3,
             "backaudio_volume": 0.8,
             "loop_backaudio": 0,
+            "cover_source_hardsub": False,
+            "cover_source_hardsub_pct": 0.14,
             "third_person_narration": False,
             "narration_mode": "none",
             "narration_style": "third",

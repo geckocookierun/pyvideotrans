@@ -148,6 +148,9 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         if hasattr(self, 'keep_original_audio'):
             self.keep_original_audio.setChecked(bool(params.get('keep_original_audio', False)))
             self.original_volume.setText(str(params.get('original_audio_volume', 0.3)))
+        if hasattr(self, 'cover_source_hardsub'):
+            self.cover_source_hardsub.setChecked(bool(params.get('cover_source_hardsub', False)))
+            self.cover_hardsub_pct.setText(str(params.get('cover_source_hardsub_pct', 0.14)))
         self.rephrase.setChecked(bool(params.get('rephrase', False)))
         if hasattr(self, 'narration_mode'):
             mode = params.get('narration_mode')

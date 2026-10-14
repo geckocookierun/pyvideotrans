@@ -236,6 +236,8 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     embed_bgm: bool = True  # 是否需要重新嵌入背景音
     keep_original_audio: bool = False  # 不分离：降低原声后与配音叠加
     original_audio_volume: float = 0.3  # 原声叠加音量倍数
+    cover_source_hardsub: bool = False  # 最终合成前遮挡片源硬字幕区域
+    cover_source_hardsub_pct: float = 0.14  # 底部遮挡高度占画面比例
     original_wav: Union[os.PathLike, str] = None  # 用于叠加的原始音轨(立体声)
     instrument: Union[os.PathLike, str] = None  # 分离出的背景音频
     vocal: Union[os.PathLike, str] = None  # 分离出的人声音频
@@ -325,6 +327,10 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
             if self.keep_original_audio:
                 _msg.append(
                     f'已选 保留原声叠加, 原声音量{self.original_audio_volume}'
+                )
+            if getattr(self, 'cover_source_hardsub', False):
+                _msg.append(
+                    f'已选 遮挡片源硬字幕, 底部高度{getattr(self, "cover_source_hardsub_pct", 0.14)}'
                 )
             if self.is_separate or self.background_music or _vocal_exists or _instr_exists:
 

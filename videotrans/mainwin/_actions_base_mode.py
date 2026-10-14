@@ -213,5 +213,8 @@ class WinActionBaseModeMixin:
         if hasattr(self.main, 'keep_original_audio'):
             self.main.keep_original_audio.setDisabled(type)
             self.main.original_volume.setDisabled(type)
+        if hasattr(self.main, 'cover_source_hardsub'):
+            self.main.cover_source_hardsub.setDisabled(type)
+            self.main.cover_hardsub_pct.setDisabled(type)
         self.main.addbackbtn.setDisabled(True if self.main.app_mode in ['tiqu'] else type)
         self.main.back_audio.setReadOnly(True if self.main.app_mode in ['tiqu'] else type)

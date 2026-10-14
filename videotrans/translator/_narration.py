@@ -74,15 +74,21 @@ def _narration_limits(lang: str = '') -> dict:
     - min cue ms ← min_speech_duration_ms2
     - scene gap ← min_silence_duration_ms
     - unit cap ← cjk_len / other_len
+
+    IMPORTANT: cjk_len / other_len are *characters per hardsub line* in the UI.
+    count_speaking_units uses characters for CJK and *words* otherwise — so for
+    Latin scripts we convert other_len chars → approx words (~5 chars/word) so a
+    long Vietnamese sentence is split into timed cues instead of one 3-line wrap.
     """
     max_cue_ms = int(float(settings.get('max_speech_duration_s', 5)) * 1000)
     min_cue_ms = int(float(settings.get('min_speech_duration_ms2', 300)))
     scene_gap_ms = int(float(settings.get('min_silence_duration_ms', 600)))
     if _lang_is_cjk(lang):
-        unit_cap = int(settings.get('cjk_len', 15))
+        unit_cap = max(1, int(settings.get('cjk_len', 15)))
     else:
-        unit_cap = int(settings.get('other_len', 40))
-    unit_cap = max(1, unit_cap)
+        other_chars = max(1, int(settings.get('other_len', 40)))
+        # ~5 Latin letters per word incl. space → words that fit one subtitle line.
+        unit_cap = max(4, other_chars // 5)
     # Only merge tiny word-split fragments (e.g. "hy"|"sinh"), never full clauses.
     min_chunk = max(1, min(3, unit_cap // 10))
     if min_cue_ms > max_cue_ms:
@@ -212,6 +218,37 @@ def _normalize_edge_rate(voice_rate) -> str:
         return '+0%'
 
 
+def _fallback_sec_per_unit(lang_code: str, lang_name: str, voice_rate: str) -> dict:
+    """Offline pace estimate when Edge-TTS probe is unavailable (403/network)."""
+    sample = calibration_sample(lang_code, lang_name)
+    units, unit = count_speaking_units(sample, lang_name or lang_code)
+    # Typical conversational pace; CJK counts characters, others words.
+    base = 0.22 if unit == 'characters' else 0.28
+    rate = _normalize_edge_rate(voice_rate)
+    try:
+        pct = float(str(rate).rstrip('%'))
+    except ValueError:
+        pct = 0.0
+    # +20% rate ≈ speak in 1/1.2 of the time.
+    factor = max(0.5, 1.0 + pct / 100.0)
+    sec_per_unit = base / factor
+    voice = resolve_edge_voice('', lang_code) or (lang_code or 'unknown')
+    logger.warning(
+        f'TTS pace probe unavailable; using fallback sec/{unit}={sec_per_unit:.4f} '
+        f'(rate={rate}, lang={lang_code or lang_name})'
+    )
+    return {
+        'sec_per_unit': sec_per_unit,
+        'unit': unit,
+        'voice': voice,
+        'rate': rate,
+        'sample_units': max(units, 1),
+        'duration': sec_per_unit * max(units, 1),
+        'sample': sample,
+        'fallback': True,
+    }
+
+
 def probe_target_sec_per_unit(
         *,
         lang_code: str,
@@ -222,18 +259,20 @@ def probe_target_sec_per_unit(
 ) -> dict:
     """Synthesize one short sample with Edge-TTS at the configured rate and measure sec/unit.
 
-    Raises RuntimeError if measurement fails — no silent fallback.
+    Retries a few times; on persistent Edge-TTS failure (e.g. 403), uses a language fallback
+    so narration can continue. Dubbing itself still uses Edge-TTS with its own retries.
     """
     from edge_tts import Communicate
     from videotrans.util.help_ffmpeg import get_audio_time
+    from videotrans.configure.config import ROOT_DIR, app_cfg
 
     sample = calibration_sample(lang_code, lang_name)
     units, unit = count_speaking_units(sample, lang_name or lang_code)
     if units < 1:
-        raise RuntimeError(tr("Could not measure dubbing pace for third-person narration"))
+        return _fallback_sec_per_unit(lang_code, lang_name, voice_rate)
     voice = resolve_edge_voice(voice_role, lang_code)
     if not voice:
-        raise RuntimeError(tr("Could not measure dubbing pace for third-person narration"))
+        return _fallback_sec_per_unit(lang_code, lang_name, voice_rate)
 
     rate = _normalize_edge_rate(voice_rate)
     out_dir = Path(cache_folder) if cache_folder else Path(tempfile.mkdtemp(prefix='narr_calib_'))
@@ -241,38 +280,54 @@ def probe_target_sec_per_unit(
     rate_tag = rate.replace('%', 'pct').replace('+', 'p').replace('-', 'm')
     out_mp3 = out_dir / f'narration_pace_calib_{_lang_code_key(lang_code)}_{rate_tag}.mp3'
 
-    async def _save():
-        communicate = Communicate(sample, voice=voice, rate=rate, volume='+0%', pitch='+0Hz')
-        await communicate.save(str(out_mp3))
+    # Match EdgeTTS dubbing: honor proxy unless edgetts-noproxy.txt exists.
+    proxy = None
+    if not Path(f'{ROOT_DIR}/edgetts-noproxy.txt').exists():
+        proxy = getattr(app_cfg, 'proxy', None) or None
 
-    try:
-        asyncio.run(_save())
-        if not out_mp3.exists() or out_mp3.stat().st_size < 100:
-            raise RuntimeError(tr("Could not measure dubbing pace for third-person narration"))
-        # get_audio_time returns milliseconds in this project.
-        duration_ms = float(get_audio_time(str(out_mp3)))
-        duration = duration_ms / 1000.0
-        if duration < 0.3:
-            raise RuntimeError(tr("Could not measure dubbing pace for third-person narration"))
-        sec_per_unit = duration / units
-        logger.debug(
-            f'TTS pace probe: voice={voice} rate={rate} units={units} {unit} '
-            f'duration={duration:.2f}s sec/unit={sec_per_unit:.4f}'
-        )
-        return {
-            'sec_per_unit': sec_per_unit,
-            'unit': unit,
-            'voice': voice,
-            'rate': rate,
-            'sample_units': units,
-            'duration': duration,
-            'sample': sample,
-        }
-    except RuntimeError:
-        raise
-    except Exception as e:
-        logger.exception(f'TTS pace probe failed: {e}')
-        raise RuntimeError(tr("Could not measure dubbing pace for third-person narration")) from e
+    async def _save_once():
+        kwargs = dict(voice=voice, rate=rate, volume='+0%', pitch='+0Hz')
+        try:
+            communicate = Communicate(sample, proxy=proxy, connect_timeout=5, **kwargs)
+        except TypeError:
+            communicate = Communicate(sample, **kwargs)
+        await asyncio.wait_for(communicate.save(str(out_mp3)), timeout=30)
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            if out_mp3.exists():
+                out_mp3.unlink(missing_ok=True)
+            asyncio.run(_save_once())
+            if not out_mp3.exists() or out_mp3.stat().st_size < 100:
+                raise RuntimeError('empty pace probe audio')
+            duration_ms = float(get_audio_time(str(out_mp3)))
+            duration = duration_ms / 1000.0
+            if duration < 0.3:
+                raise RuntimeError('pace probe audio too short')
+            sec_per_unit = duration / units
+            logger.debug(
+                f'TTS pace probe: voice={voice} rate={rate} units={units} {unit} '
+                f'duration={duration:.2f}s sec/unit={sec_per_unit:.4f}'
+            )
+            return {
+                'sec_per_unit': sec_per_unit,
+                'unit': unit,
+                'voice': voice,
+                'rate': rate,
+                'sample_units': units,
+                'duration': duration,
+                'sample': sample,
+            }
+        except Exception as e:
+            last_err = e
+            logger.warning(f'TTS pace probe attempt {attempt + 1}/3 failed: {e}')
+            if attempt < 2:
+                import time as _time
+                _time.sleep(1.5 * (attempt + 1))
+
+    logger.exception(f'TTS pace probe failed after retries: {last_err}')
+    return _fallback_sec_per_unit(lang_code, lang_name, voice_rate)
 
 
 def compute_length_budget(
@@ -934,7 +989,7 @@ def run_third_person_narration(
     source_lang = source_lang or source_code or 'auto'
     target_lang = target_lang or target_code or 'target language'
 
-    # One TTS pace probe per job at the configured dubbing rate — required, no fallback.
+    # One TTS pace probe per job; falls back if Edge-TTS is temporarily blocked (403).
     pace = probe_target_sec_per_unit(
         lang_code=target_code or '',
         lang_name=target_lang,
@@ -947,7 +1002,8 @@ def run_third_person_narration(
     pace_voice = pace['voice']
     pace_rate = pace['rate']
     logger.debug(
-        f'Narration TTS pace: {pace_voice} rate={pace_rate} style={style} -> '
+        f'Narration TTS pace: {pace_voice} rate={pace_rate} style={style} '
+        f'fallback={bool(pace.get("fallback"))} -> '
         f'{sec_per_tgt:.4f}s/{pace_unit.rstrip("s")} ({1.0 / sec_per_tgt:.2f} {pace_unit}/s)'
     )
 
