@@ -12,7 +12,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QMessageBox, QMenu, QInputDialog, QSplitter, QStackedLayout, QCheckBox
+    QMessageBox, QMenu, QInputDialog, QSplitter, QStackedLayout, QCheckBox, QToolButton
 )
 from pydub import AudioSegment
 
@@ -164,6 +164,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         # Post-TTS review only: no auto-countdown — user re-dubs NoAudio then Continues.
         self.count_down = 0
         self.timer = None
+        self._filter_noaudio_only = False
 
         main_layout = QVBoxLayout(self)
 
@@ -174,19 +175,26 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         ))
         self.prompt_label.setStyleSheet('color:#999999')
         self.prompt_label.setWordWrap(True)
-        hstop.addWidget(self.prompt_label)
+        hstop.addWidget(self.prompt_label, 1)
         self.stop_button = None
         self.noaudio_summary = QLabel('')
         self.noaudio_summary.setStyleSheet('color:#ff4d4d; font-weight:600;')
         self.noaudio_summary.setWordWrap(True)
         hstop.addWidget(self.noaudio_summary)
-        self.jump_noaudio_btn = QPushButton(tr('Next No audio'))
-        self.jump_noaudio_btn.setStyleSheet('color:#ffcc00;')
-        self.jump_noaudio_btn.setCursor(Qt.PointingHandCursor)
-        self.jump_noaudio_btn.setMinimumSize(QSize(140, 32))
-        self.jump_noaudio_btn.clicked.connect(self._jump_next_noaudio)
-        self.jump_noaudio_btn.setVisible(False)
-        hstop.addWidget(self.jump_noaudio_btn)
+        self.filter_noaudio_btn = QToolButton()
+        self.filter_noaudio_btn.setText(tr('Filter: No audio'))
+        self.filter_noaudio_btn.setCheckable(True)
+        self.filter_noaudio_btn.setChecked(False)
+        self.filter_noaudio_btn.setCursor(Qt.PointingHandCursor)
+        self.filter_noaudio_btn.setMinimumSize(QSize(160, 34))
+        self.filter_noaudio_btn.setStyleSheet(
+            "QToolButton { color:#ffcc00; padding:4px 10px; }"
+            "QToolButton:checked { background-color:#aa2222; color:#ffffff; font-weight:600; }"
+        )
+        self.filter_noaudio_btn.setToolTip(tr('Show only lines with no audio'))
+        self.filter_noaudio_btn.toggled.connect(self._on_filter_noaudio_toggled)
+        self.filter_noaudio_btn.setVisible(False)
+        hstop.addWidget(self.filter_noaudio_btn)
         main_layout.addLayout(hstop)
 
         # 操作提示
@@ -502,25 +510,58 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         if n <= 0:
             self.noaudio_summary.setText(tr('All lines have audio') + f' ({total})')
             self.noaudio_summary.setStyleSheet('color:#66ff66; font-weight:600;')
-            if hasattr(self, 'jump_noaudio_btn') and self.jump_noaudio_btn:
-                self.jump_noaudio_btn.setVisible(False)
+            if hasattr(self, 'filter_noaudio_btn') and self.filter_noaudio_btn:
+                self.filter_noaudio_btn.setVisible(False)
+                if self.filter_noaudio_btn.isChecked():
+                    self.filter_noaudio_btn.setChecked(False)
+            self._filter_noaudio_only = False
+            self._apply_noaudio_filter()
         else:
             self.noaudio_summary.setText(
                 tr('No audio') + f': {n}/{total} — ' + tr('Re-dub before Continue')
             )
             self.noaudio_summary.setStyleSheet('color:#ff4d4d; font-weight:600;')
-            if hasattr(self, 'jump_noaudio_btn') and self.jump_noaudio_btn:
-                self.jump_noaudio_btn.setVisible(True)
+            if hasattr(self, 'filter_noaudio_btn') and self.filter_noaudio_btn:
+                self.filter_noaudio_btn.setVisible(True)
+                # First time we detect missing audio: auto-filter so user need not scroll.
+                if not getattr(self, '_noaudio_filter_inited', False):
+                    self._noaudio_filter_inited = True
+                    if not self.filter_noaudio_btn.isChecked():
+                        self.filter_noaudio_btn.setChecked(True)
+                        return
+                self.filter_noaudio_btn.setText(
+                    tr('Filter: No audio') + f' ({n})'
+                    if not self._filter_noaudio_only
+                    else tr('Show all lines') + f' ({total})'
+                )
+            self._apply_noaudio_filter()
 
-    def _jump_next_noaudio(self):
-        missing = self._noaudio_rows()
-        if not missing or not hasattr(self, 'table') or not self.table:
+    def _on_filter_noaudio_toggled(self, checked: bool):
+        self._filter_noaudio_only = bool(checked)
+        total = len(self.queue_tts or [])
+        n = len(self._noaudio_rows())
+        if hasattr(self, 'filter_noaudio_btn') and self.filter_noaudio_btn:
+            self.filter_noaudio_btn.setText(
+                tr('Show all lines') + f' ({total})'
+                if checked
+                else tr('Filter: No audio') + f' ({n})'
+            )
+        self._apply_noaudio_filter()
+        if checked and hasattr(self, 'table') and self.table:
+            missing = self._noaudio_rows()
+            if missing:
+                self.table.selectRow(missing[0])
+                item = self.table.item(missing[0], 0)
+                if item:
+                    self.table.scrollToItem(item)
+
+    def _apply_noaudio_filter(self):
+        if not hasattr(self, 'table') or not self.table:
             return
-        cur = self.table.currentRow()
-        nxt = next((r for r in missing if r > cur), missing[0])
-        self.table.selectRow(nxt)
-        self.table.scrollToItem(self.table.item(nxt, 0))
-        self.table.setCurrentCell(nxt, 5)
+        missing = set(self._noaudio_rows())
+        for row in range(self.table.rowCount()):
+            hide = self._filter_noaudio_only and row not in missing
+            self.table.setRowHidden(row, hide)
 
     def _text_change(self, item):
         _column=item.column()
@@ -592,6 +633,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             text_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsEditable | Qt.ItemIsSelectable)
             text_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 6, text_item)
+        self._apply_noaudio_filter()
         self.table.itemChanged.connect(self._text_change)
 
     def _load_remaining(self, start_row):
