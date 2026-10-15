@@ -58,7 +58,13 @@ class LifecycleMixin:
 
     def closeEvent(self, event):
         self.hide()
-        from videotrans.configure.config import app_cfg, ROOT_DIR, TEMP_DIR, TEMP_ROOT,REDUBB_STATUS_FILE
+        from videotrans.configure.config import app_cfg, ROOT_DIR, TEMP_DIR, TEMP_ROOT, REDUBB_STATUS_FILE, logger
+        # Persist Advanced/main options even if Start was never clicked
+        try:
+            if hasattr(self, 'win_action') and self.win_action:
+                self.win_action.persist_ui_params()
+        except Exception as e:
+            logger.exception(f'persist_ui_params on close failed: {e}', exc_info=True)
         try:
             if Path(REDUBB_STATUS_FILE).exists():
                 Path(REDUBB_STATUS_FILE).write_text('end')

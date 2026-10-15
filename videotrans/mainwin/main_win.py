@@ -129,9 +129,22 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
             self.align_sub_audio.setVisible(True)
         self.callback('Set default value ...')
         self.select_file_type.setChecked(bool(params.get('select_file_type', False)))
-        self.voice_rate.setValue(int(params.get('voice_rate', '0').replace('%', '')))
-        self.volume_rate.setValue(int(params.get('volume', '0').replace('%', '')))
-        self.pitch_rate.setValue(int(params.get('pitch', '0').replace('Hz', '')))
+
+        def _spin_int(raw, drop=('%', 'Hz', '+')):
+            if isinstance(raw, (int, float)):
+                return int(raw)
+            s = str(raw or '0')
+            for ch in drop:
+                s = s.replace(ch, '')
+            s = s.strip()
+            try:
+                return int(float(s)) if s else 0
+            except ValueError:
+                return 0
+
+        self.voice_rate.setValue(_spin_int(params.get('voice_rate', 0)))
+        self.volume_rate.setValue(_spin_int(params.get('volume', 0)))
+        self.pitch_rate.setValue(_spin_int(params.get('pitch', 0)))
         self.voice_autorate.setChecked(bool(params.get('voice_autorate', False)))
         self.video_autorate.setChecked(bool(params.get('video_autorate', False)))
         self.fix_punc.setCurrentIndex(int(params.get('fix_punc', 0)))
@@ -191,6 +204,9 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         self.copysrt_rawvideo.setChecked(bool(params.get('copysrt_rawvideo', False)))
         self.bgmvolume.setText(str(params.get('backaudio_volume', settings.get('backaudio_volume', 0.8))))
         self.is_loop_bgm.setCurrentIndex(int(params.get('loop_backaudio', settings.get('loop_backaudio', 0))))
+        bgm = str(params.get('background_music', '') or '').strip()
+        if bgm:
+            self.back_audio.setText(bgm)
 
         _langcode = None
         if _target_language and _target_language in self.languagename:
