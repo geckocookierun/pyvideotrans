@@ -728,7 +728,7 @@
   "Cover source hardsub": "Cover source hardsub",
   "Black out the bottom band of the source video before burning subtitles, so original burned-in hardsubs do not show under the new ones.": "Blur the bottom band of the source video before burning subtitles, so original burned-in hardsubs are unreadable under the new ones.",
   "Cover height": "Cover %",
-  "Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%": "Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%",
+  "Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%": "Bottom cover height: 0.14 or 14 = 14% of frame (max 35%). Do not type 30 for 30% without understanding — use 0.18–0.22 for hardsubs.",
   "Covering source hardsub area...": "Covering source hardsub area...",
   "Set reference audio": "Set Reference Audio",
   "Creating progress bar, please wait": "Creating progress bar... Please wait.",

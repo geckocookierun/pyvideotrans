@@ -15,6 +15,18 @@ from videotrans.util.help_ffmpeg import get_video_codec, get_audio_time, runffmp
 from videotrans.util.help_misc import vail_file, read_last_n_lines, is_novoice_mp4
 
 
+def _normalize_cover_hardsub_pct(raw) -> float:
+    """Parse Cover height: 0.14 or 14 both mean 14% of frame. Values >1 are treated as percent."""
+    try:
+        s = str(raw).strip().rstrip('%').strip()
+        pct = float(s)
+    except (TypeError, ValueError):
+        return 0.14
+    if pct > 1.0:
+        pct = pct / 100.0
+    return min(0.35, max(0.05, pct))
+
+
 class AssembleMixin:
 
     def assembling(self) -> None:
@@ -58,21 +70,29 @@ class AssembleMixin:
 
 
     def _cover_source_hardsub_band(self) -> None:
-        """Blur the bottom band of novoice.mp4 so source burned-in hardsubs are unreadable."""
+        """Blur the bottom band of novoice.mp4 so source burned-in hardsubs are unreadable.
+
+        Always blur from a clean snapshot (novoice_before_cover.mp4). Applying blur onto an
+        already-blurred novoice stacks bands and makes Cover% look taller than configured.
+        """
         if self._exit() or not getattr(self.cfg, 'cover_source_hardsub', False):
             return
-        try:
-            pct = float(getattr(self.cfg, 'cover_source_hardsub_pct', 0.14) or 0.14)
-        except (TypeError, ValueError):
-            pct = 0.14
-        pct = min(0.35, max(0.05, pct))
+        pct = _normalize_cover_hardsub_pct(getattr(self.cfg, 'cover_source_hardsub_pct', 0.14))
         src = Path(self.cfg.novoice_mp4)
         if not src.exists():
             return
+        cache_dir = Path(self.cfg.cache_folder)
+        clean = cache_dir / 'novoice_before_cover.mp4'
+        # First cover in this cache: snapshot post-align silent video as the clean base.
+        if not clean.exists():
+            try:
+                shutil.copy2(src, clean)
+            except OSError as e:
+                logger.exception(f'Could not snapshot clean novoice for cover: {e}', exc_info=True)
+                return
         self.signal(text=tr("Covering source hardsub area..."))
-        tmp = src.with_name(f'novoice_cover_{os.getpid()}_{time.time_ns()}.mp4')
-        # Crop bottom band → strong blur (+ slight dim) → overlay. Keeps scene look, hides glyphs.
-        # trunc(.../2)*2 keeps even sizes for yuv420p.
+        tmp = cache_dir / f'novoice_cover_{os.getpid()}_{time.time_ns()}.mp4'
+        # Crop bottom band → strong blur → overlay. trunc(.../2)*2 keeps even sizes for yuv420p.
         fc = (
             f"[0:v]split[base][bot];"
             f"[bot]crop=iw:trunc(ih*{pct:.4f}/2)*2:0:ih-trunc(ih*{pct:.4f}/2)*2,"
@@ -82,7 +102,7 @@ class AssembleMixin:
         try:
             runffmpeg([
                 "-y",
-                "-i", src.name,
+                "-i", clean.name,
                 "-filter_complex", fc,
                 "-map", "[vout]",
                 "-an",
@@ -94,7 +114,9 @@ class AssembleMixin:
             ], cmd_dir=self.cfg.cache_folder)
             if tmp.exists() and tmp.stat().st_size > 0:
                 tmp.replace(src)
-                logger.debug(f'Blurred source hardsub band pct={pct} -> {src}')
+                logger.debug(
+                    f'Blurred source hardsub band pct={pct} from {clean.name} -> {src}'
+                )
             else:
                 logger.warning('Cover source hardsub produced empty file; keeping original novoice')
                 tmp.unlink(missing_ok=True)

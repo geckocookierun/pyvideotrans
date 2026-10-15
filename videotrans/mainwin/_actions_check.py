@@ -174,8 +174,9 @@ class WinActionCheckMixin:
             hasattr(self.main, 'cover_source_hardsub') and self.main.cover_source_hardsub.isChecked()
         )
         try:
-            pct = float(self.main.cover_hardsub_pct.text()) if hasattr(self.main, 'cover_hardsub_pct') else 0.14
-            self.cfg['cover_source_hardsub_pct'] = min(0.35, max(0.05, pct))
+            from videotrans.task._stage_assemble import _normalize_cover_hardsub_pct
+            raw = self.main.cover_hardsub_pct.text() if hasattr(self.main, 'cover_hardsub_pct') else 0.14
+            self.cfg['cover_source_hardsub_pct'] = _normalize_cover_hardsub_pct(raw)
         except (TypeError, ValueError):
             self.cfg['cover_source_hardsub_pct'] = 0.14
         self.cfg['is_separate'] = self.main.is_separate.isChecked()

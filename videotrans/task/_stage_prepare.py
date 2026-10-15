@@ -48,6 +48,11 @@ class PrepareMixin:
             app_cfg.queue_novice[self.uuid] = 'ing'
             if not self.is_copy_video:
                 self.signal(text=tr("Video needs transcoded and take a long time.."))
+            # Drop previous cover snapshot so Cover% is measured from a fresh silent video.
+            try:
+                Path(self.cfg.cache_folder, 'novoice_before_cover.mp4').unlink(missing_ok=True)
+            except OSError:
+                pass
             run_in_threadpool(self._split_novoice_byraw)
         else:
             app_cfg.queue_novice[self.uuid] = 'end'

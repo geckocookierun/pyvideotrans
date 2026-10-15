@@ -120,6 +120,7 @@ class Ui_MainWindow(object):
         self.cover_hardsub_pct.setVisible(False)
         self.cover_hardsub_pct.setToolTip(
             tr("Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%"))
+        # Accept 0.14 or 14; values >1 are percent (see _normalize_cover_hardsub_pct).
 
         self.bgm_layout.addWidget(self.is_separate)
         self.bgm_layout.addWidget(self.embed_bgm)
