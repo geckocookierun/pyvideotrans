@@ -73,6 +73,20 @@ class WinActionBaseFileMixin:
         fname = Path(fname).as_posix()
         self.main.back_audio.setText(fname)
 
+    def get_logo(self):
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self.main,
+            tr('Select a watermark image'),
+            params.get('last_opendir', ''),
+            "Image files(*.png *.jpg *.jpeg *.gif *.webp)",
+        )
+        if not fname:
+            return
+        fname = Path(fname).as_posix()
+        self.main.logo_path.setText(fname)
+        if hasattr(self.main, 'embed_logo'):
+            self.main.embed_logo.setChecked(True)
+
     def change_proxy(self, p):
         proxy = p.strip()
         if not proxy:

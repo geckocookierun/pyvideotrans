@@ -388,10 +388,71 @@ class AssembleMixin:
                         logger.exception(e,exc_info=True)
                         raise VideoTransError(tr('Translation successful but transfer failed.', tmp_target_mp4)) from e
 
+        if self.cfg.targetdir_mp4 and Path(self.cfg.targetdir_mp4).exists():
+            self._apply_embed_logo(self.cfg.targetdir_mp4)
+
         while output_source_output is not True:
             if app_cfg.exit_soft:return
             time.sleep(1)
         return
+
+    def _apply_embed_logo(self, mp4_path: str) -> None:
+        """Overlay logo/watermark on the final translated video (optional)."""
+        if not getattr(self.cfg, 'embed_logo', False):
+            return
+        png = getattr(self.cfg, 'logo_path', None)
+        if not png or not Path(png).is_file():
+            logger.warning('embed_logo enabled but logo file missing; skip')
+            return
+        try:
+            margin = max(0, int(getattr(self.cfg, 'logo_margin', 10) or 10))
+        except (TypeError, ValueError):
+            margin = 10
+        w, h = 80, 80
+        try:
+            parts = str(getattr(self.cfg, 'logo_size', '80x80') or '80x80').lower().split('x')
+            w, h = max(1, int(parts[0])), max(1, int(parts[1]))
+        except (ValueError, IndexError, TypeError, AttributeError):
+            pass
+        try:
+            pos = int(getattr(self.cfg, 'logo_pos', 0) or 0)
+        except (TypeError, ValueError):
+            pos = 0
+        positions = [
+            f"{margin}:{margin}",
+            f"(w-overlay_w-{margin}):{margin}",
+            f"(w-overlay_w-{margin}):(h-overlay_h-{margin})",
+            f"{margin}:(h-overlay_h-{margin})",
+            f"(w-overlay_w)/2:(h-overlay_h)/2",
+        ]
+        position = positions[pos if 0 <= pos < len(positions) else 0]
+        out = Path(self.cfg.cache_folder) / f'logo_out{Path(mp4_path).suffix}'
+        self.signal(text=tr('Embedding logo watermark...'))
+        codec = getattr(self, 'video_codec_num', None) or 264
+        cmd = [
+            '-y',
+            '-i', os.path.normpath(mp4_path),
+            '-i', os.path.normpath(str(png)),
+            '-filter_complex',
+            f"[1:v]scale={w}:{h}[overlay];[0:v][overlay]overlay={position}",
+            '-c:v', f'libx{codec}',
+            '-crf', f'{settings.get("crf", 23)}',
+            '-preset', f'{settings.get("preset", "fast")}',
+            '-c:a', 'copy',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            str(out),
+        ]
+        try:
+            runffmpeg(cmd, cmd_dir=self.cfg.cache_folder, force_cpu=True)
+            if out.exists() and out.stat().st_size > 0:
+                shutil.move(str(out), mp4_path)
+            else:
+                logger.warning('Logo overlay produced empty file; keep original')
+                out.unlink(missing_ok=True)
+        except Exception as e:
+            logger.exception(f'Logo overlay failed, keep original: {e}', exc_info=True)
+            out.unlink(missing_ok=True)
 
     def _get_origin_audio(self, output,duration_ms=0):
         if self.video_info.get('streams_audio', 0) == 0:

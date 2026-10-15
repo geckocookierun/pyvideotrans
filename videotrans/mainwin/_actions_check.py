@@ -179,6 +179,29 @@ class WinActionCheckMixin:
             self.cfg['cover_source_hardsub_pct'] = _normalize_cover_hardsub_pct(raw)
         except (TypeError, ValueError):
             self.cfg['cover_source_hardsub_pct'] = 0.14
+        self.cfg['embed_logo'] = bool(
+            hasattr(self.main, 'embed_logo') and self.main.embed_logo.isChecked()
+        )
+        self.cfg['logo_path'] = (
+            self.main.logo_path.text().strip() if hasattr(self.main, 'logo_path') else ''
+        )
+        self.cfg['logo_pos'] = (
+            self.main.logo_pos.currentIndex() if hasattr(self.main, 'logo_pos') else 0
+        )
+        self.cfg['logo_size'] = (
+            self.main.logo_size.text().strip() if hasattr(self.main, 'logo_size') else '80x80'
+        ) or '80x80'
+        try:
+            self.cfg['logo_margin'] = int(
+                self.main.logo_margin.text().strip()
+            ) if hasattr(self.main, 'logo_margin') else 10
+        except (TypeError, ValueError):
+            self.cfg['logo_margin'] = 10
+        if self.cfg['embed_logo']:
+            if not self.cfg['logo_path'] or not Path(self.cfg['logo_path']).is_file():
+                show_error(tr("Please select a logo/watermark image"))
+                self.main.startbtn.setDisabled(False)
+                return
         self.cfg['is_separate'] = self.main.is_separate.isChecked()
         self.cfg['embed_bgm'] = self.main.embed_bgm.isChecked()
         self.cfg['background_music'] = self.main.back_audio.text().strip()

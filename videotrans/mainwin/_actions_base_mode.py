@@ -216,5 +216,12 @@ class WinActionBaseModeMixin:
         if hasattr(self.main, 'cover_source_hardsub'):
             self.main.cover_source_hardsub.setDisabled(type)
             self.main.cover_hardsub_pct.setDisabled(type)
+        if hasattr(self.main, 'embed_logo'):
+            self.main.embed_logo.setDisabled(type)
+            self.main.logo_path.setDisabled(type)
+            self.main.logobtn.setDisabled(type)
+            self.main.logo_pos.setDisabled(type)
+            self.main.logo_size.setDisabled(type)
+            self.main.logo_margin.setDisabled(type)
         self.main.addbackbtn.setDisabled(True if self.main.app_mode in ['tiqu'] else type)
         self.main.back_audio.setReadOnly(True if self.main.app_mode in ['tiqu'] else type)

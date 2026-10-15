@@ -238,6 +238,11 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     original_audio_volume: float = 0.3  # 原声叠加音量倍数
     cover_source_hardsub: bool = False  # 最终合成前遮挡片源硬字幕区域
     cover_source_hardsub_pct: float = 0.14  # 底部遮挡高度占画面比例
+    embed_logo: bool = False  # 最终成片叠加 logo/水印
+    logo_path: Union[os.PathLike, str] = None  # logo 图片路径
+    logo_pos: int = 0  # 0左上 1右上 2右下 3左下 4居中
+    logo_size: str = "80x80"  # 宽x高
+    logo_margin: int = 10  # 边距像素
     original_wav: Union[os.PathLike, str] = None  # 用于叠加的原始音轨(立体声)
     instrument: Union[os.PathLike, str] = None  # 分离出的背景音频
     vocal: Union[os.PathLike, str] = None  # 分离出的人声音频
@@ -331,6 +336,11 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
             if getattr(self, 'cover_source_hardsub', False):
                 _msg.append(
                     f'已选 遮挡片源硬字幕, 底部高度{getattr(self, "cover_source_hardsub_pct", 0.14)}'
+                )
+            if getattr(self, 'embed_logo', False) and getattr(self, 'logo_path', None):
+                _msg.append(
+                    f'已选 嵌入Logo, {self.logo_path}, 位置{getattr(self, "logo_pos", 0)}, '
+                    f'尺寸{getattr(self, "logo_size", "80x80")}, 边距{getattr(self, "logo_margin", 10)}'
                 )
             if self.is_separate or self.background_music or _vocal_exists or _instr_exists:
 

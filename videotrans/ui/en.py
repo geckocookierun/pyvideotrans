@@ -122,6 +122,44 @@ class Ui_MainWindow(object):
             tr("Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%"))
         # Accept 0.14 or 14; values >1 are percent (see _normalize_cover_hardsub_pct).
 
+        self.embed_logo = QtWidgets.QCheckBox(self.layoutWidget)
+        self.embed_logo.setMinimumSize(QtCore.QSize(0, 30))
+        self.embed_logo.setObjectName("embed_logo")
+        self.embed_logo.setVisible(False)
+
+        self.logo_path = QtWidgets.QLineEdit()
+        self.logo_path.setPlaceholderText(tr("Select a watermark image"))
+        self.logo_path.setMaximumWidth(160)
+        self.logo_path.setVisible(False)
+
+        self.logobtn = QtWidgets.QPushButton()
+        self.logobtn.setText(tr("Select an Image"))
+        self.logobtn.setCursor(Qt.PointingHandCursor)
+        self.logobtn.setVisible(False)
+
+        self.logo_pos = QtWidgets.QComboBox()
+        self.logo_pos.addItems([
+            tr("Upper left"),
+            tr("Upper right"),
+            tr("Bottom right"),
+            tr("Bottom left"),
+            tr("Center"),
+        ])
+        self.logo_pos.setToolTip(tr("Watermark Location"))
+        self.logo_pos.setVisible(False)
+
+        self.logo_size = QtWidgets.QLineEdit()
+        self.logo_size.setText('80x80')
+        self.logo_size.setMaximumWidth(70)
+        self.logo_size.setToolTip(tr("Watermark width x height"))
+        self.logo_size.setVisible(False)
+
+        self.logo_margin = QtWidgets.QLineEdit()
+        self.logo_margin.setText('10')
+        self.logo_margin.setMaximumWidth(50)
+        self.logo_margin.setToolTip(tr("Distance of watermark from left or right side"))
+        self.logo_margin.setVisible(False)
+
         self.bgm_layout.addWidget(self.is_separate)
         self.bgm_layout.addWidget(self.embed_bgm)
         self.bgm_layout.addWidget(self.keep_original_audio)
@@ -137,6 +175,12 @@ class Ui_MainWindow(object):
         self.bgm_layout.addWidget(self.cover_source_hardsub)
         self.bgm_layout.addWidget(self.cover_hardsub_pct_label)
         self.bgm_layout.addWidget(self.cover_hardsub_pct)
+        self.bgm_layout.addWidget(self.embed_logo)
+        self.bgm_layout.addWidget(self.logo_path)
+        self.bgm_layout.addWidget(self.logobtn)
+        self.bgm_layout.addWidget(self.logo_pos)
+        self.bgm_layout.addWidget(self.logo_size)
+        self.bgm_layout.addWidget(self.logo_margin)
 
         self.enable_diariz = QtWidgets.QCheckBox()
         self.enable_diariz.setToolTip(tr("Speaker classification language"))
@@ -397,6 +441,9 @@ class Ui_MainWindow(object):
         self.cover_source_hardsub.setText(tr("Cover source hardsub"))
         self.cover_source_hardsub.setToolTip(tr(
             "Black out the bottom band of the source video before burning subtitles, so original burned-in hardsubs do not show under the new ones."))
+        self.embed_logo.setText(tr("Embed logo"))
+        self.embed_logo.setToolTip(tr(
+            "Overlay a PNG/JPG logo on the final translated video (same as Tools → watermark)."))
         self.startbtn.setText(tr("Start"))
         self.addbackbtn.setText(tr("Add background audio"))
         self.addbackbtn.setToolTip(

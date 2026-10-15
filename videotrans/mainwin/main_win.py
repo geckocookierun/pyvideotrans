@@ -151,6 +151,12 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         if hasattr(self, 'cover_source_hardsub'):
             self.cover_source_hardsub.setChecked(bool(params.get('cover_source_hardsub', False)))
             self.cover_hardsub_pct.setText(str(params.get('cover_source_hardsub_pct', 0.14)))
+        if hasattr(self, 'embed_logo'):
+            self.embed_logo.setChecked(bool(params.get('embed_logo', False)))
+            self.logo_path.setText(str(params.get('logo_path', '') or ''))
+            self.logo_pos.setCurrentIndex(int(params.get('logo_pos', 0) or 0))
+            self.logo_size.setText(str(params.get('logo_size', '80x80') or '80x80'))
+            self.logo_margin.setText(str(params.get('logo_margin', 10)))
         self.rephrase.setChecked(bool(params.get('rephrase', False)))
         if hasattr(self, 'narration_mode'):
             mode = params.get('narration_mode')

@@ -15,6 +15,8 @@ class BindSignalsMixin:
         self.win_action = WinAction(self)
         self.restart_btn.clicked.connect(self.restart_app)
         self.addbackbtn.clicked.connect(self.win_action.get_background)
+        if hasattr(self, 'logobtn'):
+            self.logobtn.clicked.connect(self.win_action.get_logo)
         self.voice_autorate.toggled.connect(self.win_action.check_voice_autorate)
         self.video_autorate.toggled.connect(self.win_action.check_video_autorate)
         self.enable_cuda.toggled.connect(self.win_action.check_cuda)
