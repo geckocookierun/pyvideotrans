@@ -48,11 +48,12 @@ class PrepareMixin:
             app_cfg.queue_novice[self.uuid] = 'ing'
             if not self.is_copy_video:
                 self.signal(text=tr("Video needs transcoded and take a long time.."))
-            # Drop previous cover snapshot so Cover% is measured from a fresh silent video.
-            try:
-                Path(self.cfg.cache_folder, 'novoice_before_cover.mp4').unlink(missing_ok=True)
-            except OSError:
-                pass
+            # Drop previous cover seal/meta so a new Cover% cannot reuse a blurred base.
+            for _name in ('novoice_before_cover.mp4', 'cover_hardsub_meta.json'):
+                try:
+                    Path(self.cfg.cache_folder, _name).unlink(missing_ok=True)
+                except OSError:
+                    pass
             run_in_threadpool(self._split_novoice_byraw)
         else:
             app_cfg.queue_novice[self.uuid] = 'end'
@@ -137,6 +138,19 @@ class PrepareMixin:
         self.signal(text=tr('endfenliyinpin'))
         logger.debug(f'[预处理阶段结束耗时]:{time.time()-_st}s')
 
+    def _seal_novoice_before_cover(self) -> None:
+        """Snapshot current silent video as the clean cover base (pre-blur)."""
+        src = Path(self.cfg.novoice_mp4)
+        if not src.exists():
+            return
+        clean = Path(self.cfg.cache_folder) / 'novoice_before_cover.mp4'
+        try:
+            shutil.copy2(src, clean)
+            Path(self.cfg.cache_folder, 'cover_hardsub_meta.json').unlink(missing_ok=True)
+            logger.debug(f'Sealed clean novoice for cover: {clean}')
+        except OSError as e:
+            logger.warning(f'Could not seal novoice_before_cover: {e}')
+
     def _split_novoice_byraw(self):
         import os
         from videotrans.configure.config import settings
@@ -152,41 +166,45 @@ class PrepareMixin:
         ]
         _name = os.path.basename(self.cfg.novoice_mp4)
         enc_qua = [] if self.is_copy_video else ['-crf', '18']
-        if self.is_copy_video or settings.get('force_lib'):
-            return runffmpeg(cmd + enc_qua + [_name], noextname=self.uuid, cmd_dir=self.cfg.cache_folder)
-
         try:
-            hw_decode_args, _, vcodec, enc_args = self._get_hard_cfg(codec="264")
-            cmd = [
-                "-y",
-                "-fflags",
-                "+genpts",
-            ]
-            cmd += hw_decode_args
+            if self.is_copy_video or settings.get('force_lib'):
+                runffmpeg(cmd + enc_qua + [_name], noextname=self.uuid, cmd_dir=self.cfg.cache_folder)
+            else:
+                try:
+                    hw_decode_args, _, vcodec, enc_args = self._get_hard_cfg(codec="264")
+                    cmd = [
+                        "-y",
+                        "-fflags",
+                        "+genpts",
+                    ]
+                    cmd += hw_decode_args
 
-            cmd += [
-                "-i",
-                self.cfg.name,
-                "-an",
-                "-c:v",
-                vcodec,
-                _name
-            ]
-            self._subprocess(cmd)
-            app_cfg.queue_novice[self.uuid] = 'end'
-        except Exception as e:
-            logger.exception(f'硬件分离无声视频失败,尝试软分离 {e}', exc_info=True)
-            return runffmpeg([
-                "-y",
-                "-fflags",
-                "+genpts",
-                "-i",
-                self.cfg.name,
-                "-an",
-                "-c:v",
-                "libx264",
-                _name
-            ], noextname=self.uuid, cmd_dir=self.cfg.cache_folder, force_cpu=True)
+                    cmd += [
+                        "-i",
+                        self.cfg.name,
+                        "-an",
+                        "-c:v",
+                        vcodec,
+                        _name
+                    ]
+                    self._subprocess(cmd)
+                    app_cfg.queue_novice[self.uuid] = 'end'
+                except Exception as e:
+                    logger.exception(f'硬件分离无声视频失败,尝试软分离 {e}', exc_info=True)
+                    runffmpeg([
+                        "-y",
+                        "-fflags",
+                        "+genpts",
+                        "-i",
+                        self.cfg.name,
+                        "-an",
+                        "-c:v",
+                        "libx264",
+                        _name
+                    ], noextname=self.uuid, cmd_dir=self.cfg.cache_folder, force_cpu=True)
+        finally:
+            # Seal immediately after a fresh extract so Cover% never snapshots a blurred novoice.
+            self._seal_novoice_before_cover()
 
     def _split_audio_byraw(self, is_separate=False):
         cmd = [

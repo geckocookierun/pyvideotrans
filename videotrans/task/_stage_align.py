@@ -44,6 +44,15 @@ class AlignMixin:
         self.queue_tts = rate_inst.run()
         if vail_file(self.cfg.novoice_mp4):
             self.video_time = get_video_duration(self.cfg.novoice_mp4)
+            # Align may rewrite novoice; re-seal clean cover base before assemble blurs it.
+            try:
+                meta = Path(self.cfg.cache_folder) / 'cover_hardsub_meta.json'
+                if not meta.exists():
+                    clean = Path(self.cfg.cache_folder) / 'novoice_before_cover.mp4'
+                    shutil.copy2(self.cfg.novoice_mp4, clean)
+                    logger.debug(f'Re-sealed novoice_before_cover after align: {clean}')
+            except OSError as e:
+                logger.warning(f'Could not re-seal novoice_before_cover after align: {e}')
         
         # 更新字幕
         for it in self.queue_tts:

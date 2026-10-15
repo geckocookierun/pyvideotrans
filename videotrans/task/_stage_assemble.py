@@ -72,9 +72,10 @@ class AssembleMixin:
     def _cover_source_hardsub_band(self) -> None:
         """Blur the bottom band of novoice.mp4 so source burned-in hardsubs are unreadable.
 
-        Always blur from a clean snapshot (novoice_before_cover.mp4). Applying blur onto an
-        already-blurred novoice stacks bands and makes Cover% look taller than configured.
+        Always blur from the sealed clean base (novoice_before_cover.mp4). Never snapshot
+        from an already-blurred novoice — that made Cover% updates look like the old tall band.
         """
+        import json
         if self._exit() or not getattr(self.cfg, 'cover_source_hardsub', False):
             return
         pct = _normalize_cover_hardsub_pct(getattr(self.cfg, 'cover_source_hardsub_pct', 0.14))
@@ -83,8 +84,16 @@ class AssembleMixin:
             return
         cache_dir = Path(self.cfg.cache_folder)
         clean = cache_dir / 'novoice_before_cover.mp4'
-        # First cover in this cache: snapshot post-align silent video as the clean base.
+        meta = cache_dir / 'cover_hardsub_meta.json'
+        # Seal from novoice only if we have never covered this cache yet.
+        # If meta exists, clean must already be the pre-blur base — do not refresh from src.
         if not clean.exists():
+            if meta.exists():
+                logger.warning(
+                    'novoice_before_cover missing after a prior cover; '
+                    'refusing to snapshot blurred novoice — skip cover this run'
+                )
+                return
             try:
                 shutil.copy2(src, clean)
             except OSError as e:
@@ -92,11 +101,12 @@ class AssembleMixin:
                 return
         self.signal(text=tr("Covering source hardsub area..."))
         tmp = cache_dir / f'novoice_cover_{os.getpid()}_{time.time_ns()}.mp4'
-        # Crop bottom band → strong blur → overlay. trunc(.../2)*2 keeps even sizes for yuv420p.
+        # Crop bottom band → moderate blur → overlay. trunc(.../2)*2 keeps even yuv420p sizes.
+        # Keep sigma modest so soft edges do not make Cover% look much taller than set.
         fc = (
             f"[0:v]split[base][bot];"
             f"[bot]crop=iw:trunc(ih*{pct:.4f}/2)*2:0:ih-trunc(ih*{pct:.4f}/2)*2,"
-            f"gblur=sigma=36:steps=4,eq=saturation=0.7[blur];"
+            f"gblur=sigma=16:steps=2,eq=saturation=0.75[blur];"
             f"[base][blur]overlay=0:main_h-overlay_h[vout]"
         )
         try:
@@ -114,6 +124,10 @@ class AssembleMixin:
             ], cmd_dir=self.cfg.cache_folder)
             if tmp.exists() and tmp.stat().st_size > 0:
                 tmp.replace(src)
+                try:
+                    meta.write_text(json.dumps({'pct': pct}, ensure_ascii=False), encoding='utf-8')
+                except OSError:
+                    pass
                 logger.debug(
                     f'Blurred source hardsub band pct={pct} from {clean.name} -> {src}'
                 )
