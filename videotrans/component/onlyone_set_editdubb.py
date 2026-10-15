@@ -136,23 +136,21 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.setMinimumHeight(int(parent.screen_size[1]*0.9))
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMaximizeButtonHint)
 
-        self.count_down = int(float(settings.get('countdown_sec', 1)))
+        # No auto-countdown after TTS: user must review / re-dub NoAudio lines, then continue.
+        self.count_down = 0
+        self.timer = None
 
         main_layout = QVBoxLayout(self)
 
         # Top Bar
         hstop = QHBoxLayout()
-        self.prompt_label = QLabel(tr("You can check the voiceover here, or modify the text and re-encode the voiceover. Please stop the countdown before proceeding"))
+        self.prompt_label = QLabel(tr(
+            "Review dubbing here. Re-select and re-dub any line with no audio, then click Continue when ready."
+        ))
         self.prompt_label.setStyleSheet('color:#999999')
         self.prompt_label.setWordWrap(True)
         hstop.addWidget(self.prompt_label)
-
-        self.stop_button = QPushButton(f"{tr('Click here to stop the countdown')}({self.count_down})")
-        self.stop_button.setStyleSheet("color:#ffff00")
-        self.stop_button.setCursor(Qt.PointingHandCursor)
-        self.stop_button.setMinimumSize(QSize(300, 35))
-        self.stop_button.clicked.connect(self.stop_countdown)
-        hstop.addWidget(self.stop_button)
+        self.stop_button = None
         main_layout.addLayout(hstop)
 
         # 操作提示
@@ -427,10 +425,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             # 拦截表格按键事件（Ctrl+方向键调时间）
             self.table.installEventFilter(self)
             
-            # 9. 启动倒计时
-            self.timer = QTimer(self)
-            self.timer.timeout.connect(self.update_countdown)
-            self.timer.start(1000)
+            # No auto-countdown — stay open until user clicks Continue.
             self._play_with_video(None,0,5)
             if self.parent:
                 self.raise_()                

@@ -77,8 +77,9 @@ def _narration_limits(lang: str = '') -> dict:
 
     IMPORTANT: cjk_len / other_len are *characters per hardsub line* in the UI.
     count_speaking_units uses characters for CJK and *words* otherwise — so for
-    Latin scripts we convert other_len chars → approx words (~5 chars/word) so a
-    long Vietnamese sentence is split into timed cues instead of one 3-line wrap.
+    Latin scripts we convert other_len chars → approx words (~5 chars/word).
+    unit_cap is a soft target for the AI prompt (complete short lines). Latin text
+    is NOT hard-chopped by word count (that created incomplete “câu cụt” cues).
     """
     max_cue_ms = int(float(settings.get('max_speech_duration_s', 5)) * 1000)
     min_cue_ms = int(float(settings.get('min_speech_duration_ms2', 300)))
@@ -379,6 +380,11 @@ def compute_length_budget(
     max_sentences = max(n_src, by_length)
     max_sentences = min(max_sentences, max(n_src * 2, by_length))
     min_sentences = max(1, min(n_src, 2 if ideal >= 18 else 1))
+    unit_cap = _narration_limits(target_lang)['unit_cap']
+    if one_to_one:
+        # Allow AI to emit several short complete lines per source beat.
+        min_sentences = n_src
+        max_sentences = max(n_src, min(n_src * 4, max(n_src * 2, by_length * 2)))
 
     return {
         'window_s': window_s,
@@ -393,6 +399,7 @@ def compute_length_budget(
         'min_sentences': min_sentences,
         'max_sentences': max_sentences,
         'n_src': n_src,
+        'unit_cap': unit_cap,
         'src_rate': src_rate,
         'sec_per_src': sec_per_src,
         'sec_per_tgt': sec_per_tgt,
@@ -471,9 +478,10 @@ def _split_by_units(text: str, lang: str, max_units: int) -> List[str]:
 def _split_text_for_cue_cap(text: str, lang: str, max_units: int) -> List[str]:
     """Split rewrite text into short timed cues.
 
-    Always split on sentence end AND commas/clauses — otherwise unread text
-    stays on screen while earlier words are still being spoken.
-    Over-long clauses then split by cjk_len/other_len (settings).
+    Prefer sentence/comma boundaries so each cue stays a complete spoken phrase.
+    Hard mid-phrase word chops (Latin) created incomplete “câu cụt” lines — the
+    AI prompt must emit short complete lines instead. CJK may still fall back to
+    character-length splits when a clause has no punctuation.
     """
     text = (text or '').strip()
     if not text:
@@ -481,17 +489,63 @@ def _split_text_for_cue_cap(text: str, lang: str, max_units: int) -> List[str]:
     max_units = max(1, int(max_units))
     sentences = [p.strip() for p in _SENTENCE_SPLIT_RE.split(text) if p and p.strip()] or [text]
     out: List[str] = []
+    cjk = _lang_is_cjk(lang) or _text_is_cjk_heavy(text)
     for sent in sentences:
-        # Always break clauses so timestamps follow speech, not one long 1:1 block.
-        # Do NOT re-merge across commas — unread clauses must get their own cue.
+        # Break clauses so timestamps follow speech, not one long 1:1 block.
         clauses = [p.strip() for p in _CLAUSE_SPLIT_RE.split(sent) if p and p.strip()] or [sent]
         for clause in clauses:
             cn, _ = count_speaking_units(clause, lang)
-            if cn <= max_units:
+            if cn <= max_units or not cjk:
+                # Latin: keep complete clause even if over soft unit_cap.
                 out.append(clause)
             else:
                 out.extend(_split_by_units(clause, lang, max_units))
     return out or [text]
+
+
+def _pack_lines_into_slots(
+        lines: Sequence[str],
+        n_slots: int,
+        lang: str,
+) -> List[List[str]]:
+    """Assign AI short lines into original cue slots (keep gaps), by speaking weight."""
+    n_slots = max(1, int(n_slots))
+    cleaned = [(t or '').strip() or '…' for t in lines] or ['…']
+    if len(cleaned) <= n_slots:
+        groups = [[cleaned[i]] for i in range(len(cleaned))]
+        while len(groups) < n_slots:
+            groups.append(['…'])
+        return groups
+    units = [max(1, count_speaking_units(t, lang)[0]) for t in cleaned]
+    total_u = sum(units) or 1
+    # Start from even counts, then nudge boundaries toward speaking-weight shares.
+    base, rem = divmod(len(cleaned), n_slots)
+    sizes = [base + (1 if i < rem else 0) for i in range(n_slots)]
+    cuts = []
+    idx = 0
+    for sz in sizes[:-1]:
+        idx += sz
+        cuts.append(idx)
+    # Nudge each cut ±1 if it better matches cumulative weight targets.
+    for ci, cut in enumerate(list(cuts)):
+        target_u = total_u * (ci + 1) / n_slots
+        best = cut
+        best_err = abs(sum(units[:cut]) - target_u)
+        for cand in (cut - 1, cut + 1):
+            lo = cuts[ci - 1] + 1 if ci > 0 else 1
+            hi = (cuts[ci + 1] - 1) if ci + 1 < len(cuts) else (len(cleaned) - (n_slots - ci - 1))
+            if cand < lo or cand > hi:
+                continue
+            err = abs(sum(units[:cand]) - target_u)
+            if err < best_err:
+                best, best_err = cand, err
+        cuts[ci] = best
+    groups: List[List[str]] = []
+    prev = 0
+    for cut in cuts + [len(cleaned)]:
+        groups.append(cleaned[prev:cut] or ['…'])
+        prev = cut
+    return groups
 
 
 def build_timed_cues(
@@ -542,23 +596,28 @@ def build_one_to_one_cues(
         *,
         max_cue_ms: Optional[int] = None,
 ) -> List[Tuple[int, int, str]]:
-    """Map rewritten lines onto original cue slots (keep gaps); split long slots/text."""
-    n = min(len(source_times), len(new_lines))
+    """Map AI short complete lines onto original cue slots (keep gaps).
+
+    When the AI returns more lines than source cues, pack by speaking weight into
+    slots. Further splits only on sentence/comma — never mid-phrase word chops.
+    """
     out: List[Tuple[int, int, str]] = []
     lim = _narration_limits(target_lang)
     min_cue_ms = lim['min_cue_ms']
     max_cue_ms = lim['max_cue_ms'] if max_cue_ms is None else max(min_cue_ms, int(max_cue_ms))
     max_units = _cue_unit_cap(target_lang, sec_per_tgt, max_cue_ms)
+    n = len(source_times)
+    if n <= 0:
+        return out
+    slot_groups = _pack_lines_into_slots(new_lines, n, target_lang)
     for i in range(n):
         a, b = int(source_times[i][0]), int(source_times[i][1])
         if b <= a:
             b = a + min_cue_ms
-        text = (new_lines[i] or '').strip() or '…'
-        chunks = _split_text_for_cue_cap(text, target_lang, max_units)
-        if len(chunks) == 1:
-            speak_ms = int(count_speaking_units(chunks[0], target_lang)[0] * sec_per_tgt * 1000) + 200
-            if speak_ms > max_cue_ms or count_speaking_units(chunks[0], target_lang)[0] > max_units:
-                chunks = _split_text_for_cue_cap(chunks[0], target_lang, max(1, max_units // 2))
+        chunks: List[str] = []
+        for text in slot_groups[i]:
+            chunks.extend(_split_text_for_cue_cap(text, target_lang, max_units))
+        chunks = [c for c in chunks if c and c.strip()] or ['…']
         if len(chunks) == 1:
             speak_ms = int(count_speaking_units(chunks[0], target_lang)[0] * sec_per_tgt * 1000) + 200
             dur = min(max_cue_ms, max(min_cue_ms, speak_ms), b - a)
@@ -773,20 +832,27 @@ def narration_prompt(
             f"(≈{1.0 / pace:.2f} {unit}/s including short pauses).\n"
         )
     style = _normalize_narration_style(style)
+    unit_cap = int(budget.get('unit_cap') or _narration_limits(target_lang)['unit_cap'])
     if one_to_one:
         lead = _dialogue_rewrite_instructions(target)
         structure = (
-            f"STRUCTURE (1:1): output EXACTLY {n_src} lines — "
-            f"one polished dialogue line per numbered source line, same order. "
-            "Do NOT merge, skip, or add extra source beats.\n"
-            "Keep natural spoken wording. If one source line has two beats, join them with a comma "
-            "(system splits each comma clause into its own timestamp). "
-            "FORBIDDEN: two full sentences in one line without a comma. "
+            f"STRUCTURE (1:1 meaning, short cues): cover every numbered source beat in order. "
+            f"You MAY output MORE than {n_src} lines when a beat needs several short spoken cues. "
+            "Do NOT merge or skip source beats.\n"
+            "YOU split long speech into short COMPLETE spoken lines yourself — "
+            "the system will NOT chop words mid-phrase.\n"
+            f"Each OUTPUT LINE ≈ ≤{unit_cap} {unit}, a complete spoken phrase "
+            "(subject+verb or natural breath group that can stand alone).\n"
+            "FORBIDDEN: incomplete fragments / dangling particles / lone words "
+            "(e.g. ending a cue on 'gỗ,' / 'ích' / 'nhé' alone).\n"
+            "If two complete breath groups belong together, put them on separate lines "
+            "OR join with a comma (comma groups also become separate timestamps).\n"
             "Do NOT delete names, verbs, or mid-sentence meaning to shorten.\n"
         )
         sentence_rule = (
-            f"Use EXACTLY {n_src} lines. One complete sentence/clause per line. "
-            "No multi-sentence lines. Do not drop words from the middle of a line.\n"
+            f"Use {budget['min_sentences']}–{budget['max_sentences']} lines "
+            f"(at least {n_src}). One COMPLETE short phrase per line. "
+            "No multi-sentence lines. Never leave a cue mid-phrase.\n"
         )
         rewrite_note = (
             "Do NOT leave a raw literal gloss — after translating, rewrite for natural spoken dubbing.\n"
@@ -800,11 +866,12 @@ def narration_prompt(
             "Do NOT translate word-for-word line by line, but each source line's meaning must still appear. "
             "Prefer one complete narration sentence per source beat. "
             "Never put two story beats into one line. "
-            "Do NOT delete mid-sentence words; the system will split long timestamps.\n"
+            f"YOU emit short COMPLETE lines (≈ ≤{unit_cap} {unit}); "
+            "do not rely on mid-phrase word chopping.\n"
         )
         sentence_rule = (
             f"Use {budget['min_sentences']}–{budget['max_sentences']} complete sentences, "
-            "one sentence per line. No multi-sentence lines.\n"
+            "one sentence per line. No multi-sentence lines. Never leave a cue mid-phrase.\n"
         )
         rewrite_note = (
             "Do NOT translate word-for-word; rewrite as narration with clear subject and verb.\n"
@@ -855,12 +922,17 @@ def narration_shorten_prompt(
     draft = "\n".join(draft_lines)
     style = _normalize_narration_style(style)
     n_src = budget.get('n_src') or max(1, len(source_lines))
+    unit_cap = int(budget.get('unit_cap') or _narration_limits(target_lang)['unit_cap'])
     if one_to_one:
         mode = (
             f"polished DIALOGUE in {target} (translate then rewrite; keep speaker I/you/he; "
             "NOT third-person narrator)"
         )
-        count_rule = f"Keep EXACTLY {n_src} lines (1:1 with source).\n"
+        count_rule = (
+            f"Keep at least {n_src} and at most {budget.get('max_sentences', n_src)} lines. "
+            f"Each line a COMPLETE short phrase (≈ ≤{unit_cap} {unit}). "
+            "You may use extra lines to split long speech — never mid-phrase fragments.\n"
+        )
     else:
         mode = (
             "first-person character narration (I/me, stay inside the protagonist)"
@@ -1030,8 +1102,12 @@ def run_third_person_narration(
         )
         if one_to_one:
             n_src = budget['n_src']
+            # Keep AI-allowed range (short complete lines may exceed n_src).
             budget['min_sentences'] = n_src
-            budget['max_sentences'] = n_src
+            budget['max_sentences'] = max(
+                budget.get('max_sentences') or n_src,
+                n_src,
+            )
         logger.debug(
             f'Narration budget scene {lo + 1}-{hi + 1}: window={window_s:.1f}s '
             f'spoken={spoken_s:.1f}s budget_s={budget.get("budget_s", window_s):.1f}s '
@@ -1097,9 +1173,7 @@ def run_third_person_narration(
             n_src = budget['n_src']
             if len(new_lines) < n_src:
                 new_lines = new_lines + source_lines[len(new_lines):n_src]
-            elif len(new_lines) > n_src:
-                new_lines = new_lines[:n_src]
-            # Keep original cue gaps; size/split cues via Advanced Settings limits.
+            # Keep original cue gaps; pack extra short AI lines into slots (no truncate).
             src_times_ne = []
             for i in range(lo, hi + 1):
                 t = (text_list[i].get('text') if hasattr(text_list[i], 'get') else text_list[i]['text'] or '').strip()
