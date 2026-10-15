@@ -30,6 +30,31 @@ _REDUBB_QUEUE={}
 # 存储文件名映射行index
 _FILENAME_ROW_MAP={}
 
+# Below this, treat as missing TTS (Edge NoAudio / empty stub).
+_MIN_AUDIO_S = 0.08
+
+
+def _line_audio_secs(item: dict) -> float:
+    """Actual dubbed seconds; 0 if file missing/empty/unreadable."""
+    path = item.get('filename')
+    if not vail_file(path):
+        return 0.0
+    try:
+        return max(0.0, len(AudioSegment.from_file(path)) / 1000.0)
+    except Exception:
+        return 0.0
+
+
+def _status_msg(dubbing: float, duration: float) -> str:
+    diff = round(dubbing - duration, 3)
+    if dubbing <= _MIN_AUDIO_S:
+        return tr('No audio')
+    if diff > 0:
+        return f'[{dubbing}s] {tr("Exceeded")} +{diff}s'
+    if diff < 0:
+        return f'[{dubbing}s] {tr("Shortened")} {abs(diff)}s'
+    return f'{tr("Audio OK")} {dubbing}s'
+
 # 本地内置TTS渠道，只启动一个配音任务
 class ReDubb(QThread):
     uito = Signal(str)
@@ -136,7 +161,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.setMinimumHeight(int(parent.screen_size[1]*0.9))
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMaximizeButtonHint)
 
-        # No auto-countdown after TTS: user must review / re-dub NoAudio lines, then continue.
+        # Post-TTS review only: no auto-countdown — user re-dubs NoAudio then Continues.
         self.count_down = 0
         self.timer = None
 
@@ -151,6 +176,17 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.prompt_label.setWordWrap(True)
         hstop.addWidget(self.prompt_label)
         self.stop_button = None
+        self.noaudio_summary = QLabel('')
+        self.noaudio_summary.setStyleSheet('color:#ff4d4d; font-weight:600;')
+        self.noaudio_summary.setWordWrap(True)
+        hstop.addWidget(self.noaudio_summary)
+        self.jump_noaudio_btn = QPushButton(tr('Next No audio'))
+        self.jump_noaudio_btn.setStyleSheet('color:#ffcc00;')
+        self.jump_noaudio_btn.setCursor(Qt.PointingHandCursor)
+        self.jump_noaudio_btn.setMinimumSize(QSize(140, 32))
+        self.jump_noaudio_btn.clicked.connect(self._jump_next_noaudio)
+        self.jump_noaudio_btn.setVisible(False)
+        hstop.addWidget(self.jump_noaudio_btn)
         main_layout.addLayout(hstop)
 
         # 操作提示
@@ -360,7 +396,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
                 '\u23F5',
                 '\u270D'+tr("Start Time")+'/s',
                 '\u270D'+tr("End Time")+'/s',
-                tr("Dubbed Status"),
+                tr("Dubbed Status"),  # No audio / OK / Exceeded / Shortened
                 '\u270D'+tr("Subtitle Text")
             ])
             
@@ -425,7 +461,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             # 拦截表格按键事件（Ctrl+方向键调时间）
             self.table.installEventFilter(self)
             
-            # No auto-countdown — stay open until user clicks Continue.
+            # No auto-countdown after TTS — stay open until user clicks Continue.
             self._play_with_video(None,0,5)
             if self.parent:
                 self.raise_()                
@@ -437,23 +473,54 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             self.loading_label.setText(f"Error: {e}")
 
     def _precompute_data(self):
-        """预计算所有显示数据"""
+        """预计算所有显示数据 — mark missing/empty wav as No audio."""
         for item in self.queue_tts:
             duration = (item['end_time'] - item['start_time']) / 1000.0
-            dubbing = float(item.get('dubbing_s', 0.0))
-            diff = round(dubbing - duration, 3)
-            
-            if dubbing <= 0.0:
-                msg = tr('No audio')
-            elif diff > 0:
-                msg = f'[{dubbing}s]{tr("Exceeded")} {diff}s'
-            elif diff < 0:
-                msg = f'[{dubbing}s]{tr("Shortened")} {abs(diff)}s'
-            else:
-                msg = f'{dubbing}s'
-            
+            stored = float(item.get('dubbing_s', 0.0) or 0.0)
+            if not vail_file(item.get('filename')):
+                item['dubbing_s'] = 0.0
+            elif stored <= _MIN_AUDIO_S:
+                # Re-probe only suspicious rows (missing length / Edge NoAudio stubs).
+                item['dubbing_s'] = _line_audio_secs(item)
             item['_duration'] = duration
-            item['_msg'] = msg
+            item['_msg'] = _status_msg(float(item.get('dubbing_s', 0.0) or 0.0), duration)
+        self._refresh_noaudio_summary()
+
+    def _noaudio_rows(self):
+        rows = []
+        for i, item in enumerate(self.queue_tts):
+            if float(item.get('dubbing_s', 0.0) or 0.0) <= _MIN_AUDIO_S:
+                rows.append(i)
+        return rows
+
+    def _refresh_noaudio_summary(self):
+        if not hasattr(self, 'noaudio_summary') or not self.noaudio_summary:
+            return
+        total = len(self.queue_tts or [])
+        missing = self._noaudio_rows()
+        n = len(missing)
+        if n <= 0:
+            self.noaudio_summary.setText(tr('All lines have audio') + f' ({total})')
+            self.noaudio_summary.setStyleSheet('color:#66ff66; font-weight:600;')
+            if hasattr(self, 'jump_noaudio_btn') and self.jump_noaudio_btn:
+                self.jump_noaudio_btn.setVisible(False)
+        else:
+            self.noaudio_summary.setText(
+                tr('No audio') + f': {n}/{total} — ' + tr('Re-dub before Continue')
+            )
+            self.noaudio_summary.setStyleSheet('color:#ff4d4d; font-weight:600;')
+            if hasattr(self, 'jump_noaudio_btn') and self.jump_noaudio_btn:
+                self.jump_noaudio_btn.setVisible(True)
+
+    def _jump_next_noaudio(self):
+        missing = self._noaudio_rows()
+        if not missing or not hasattr(self, 'table') or not self.table:
+            return
+        cur = self.table.currentRow()
+        nxt = next((r for r in missing if r > cur), missing[0])
+        self.table.selectRow(nxt)
+        self.table.scrollToItem(self.table.item(nxt, 0))
+        self.table.setCurrentCell(nxt, 5)
 
     def _text_change(self, item):
         _column=item.column()
@@ -503,17 +570,18 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             end_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 4, end_item)
             
-            # 4: Status
+            # 4: Status (No audio / OK / Exceeded / Shortened)
             msg_item = QTableWidgetItem(data['_msg'])
             msg_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             msg_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            dubbing = float(data.get('dubbing_s', 0.0))
-            diff=dubbing - float( data['_duration'])
-            if dubbing <= 0:
-                msg_item.setForeground(QColor("#ff4d4d"))
-            elif  diff>0:
+            dubbing = float(data.get('dubbing_s', 0.0) or 0.0)
+            diff = dubbing - float(data['_duration'])
+            if dubbing <= _MIN_AUDIO_S:
+                msg_item.setForeground(QColor("#ffffff"))
+                msg_item.setBackground(QColor("#aa2222"))
+            elif diff > 0:
                 msg_item.setForeground(QColor("#ff6600"))
-            elif  diff<0:
+            elif diff < 0:
                 msg_item.setForeground(QColor("#ffffff"))
             else:
                 msg_item.setForeground(QColor("#66ff66"))
@@ -698,29 +766,32 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         
         # 重新计算状态
         duration = (item['end_time'] - item['start_time']) / 1000.0
-        dubbing = float(item.get('dubbing_s', 0.0))
+        live = _line_audio_secs(item)
+        if live > 0 or not vail_file(item.get('filename')):
+            item['dubbing_s'] = live
+        dubbing = float(item.get('dubbing_s', 0.0) or 0.0)
         diff = round(dubbing - duration, 3)
         if not msg:
-            if dubbing <= 0.0:
-                msg = tr('No audio')
-            elif diff > 0:
-                msg = f'[{dubbing}s]{tr("Exceeded")}{diff}s'
-            elif diff < 0:
-                msg = f'[{dubbing}s]{tr("Shortened")}{abs(diff)}s'
-            else:
-                msg = f'{dubbing}s'
-        
+            msg = _status_msg(dubbing, duration)
+        item['_msg'] = msg
+        item['_duration'] = duration
+
         msg_item = self.table.item(row, 5)
         if msg_item:
             msg_item.setText(str(msg))
-            if dubbing <= 0:
-                msg_item.setForeground(QColor("#ff4d4d"))
-            elif diff>0:
-                msg_item.setForeground(QColor("#ff6600"))
-            elif diff<0:
+            if dubbing <= _MIN_AUDIO_S:
                 msg_item.setForeground(QColor("#ffffff"))
+                msg_item.setBackground(QColor("#aa2222"))
+            elif diff > 0:
+                msg_item.setForeground(QColor("#ff6600"))
+                msg_item.setBackground(QColor("#1a1a1a"))
+            elif diff < 0:
+                msg_item.setForeground(QColor("#ffffff"))
+                msg_item.setBackground(QColor("#1a1a1a"))
             else:
                 msg_item.setForeground(QColor("#66ff66"))
+                msg_item.setBackground(QColor("#1a1a1a"))
+        self._refresh_noaudio_summary()
 
     # ===================== Video + Audio playback =====================
     def _ensure_players(self):
@@ -992,27 +1063,18 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.reject()
 
     def update_countdown(self):
-        self.count_down -= 1
-        if hasattr(self, 'stop_button') and self.stop_button:
-            self.stop_button.setText(f"{tr('Click here to stop the countdown')}({self.count_down})")
-
-        if self.count_down <= 0:
-            if hasattr(self, 'timer') and self.timer:
-                self.timer.stop()
-            self.save_and_close()
+        # Post-TTS review must never auto-close into assemble.
+        if hasattr(self, 'timer') and self.timer:
+            self.timer.stop()
+            self.timer = None
+        return
 
     def stop_countdown(self):
         if hasattr(self, 'timer') and self.timer:
             self.timer.stop()
             self.timer = None
 
-        if hasattr(self, 'prompt_label') and self.prompt_label:
-            try:
-                self.prompt_label.deleteLater()
-            except RuntimeError:
-                pass
-            self.prompt_label = None
-
+        # Keep the review tip; only remove the old stop-countdown button if present.
         if hasattr(self, 'stop_button') and self.stop_button:
             try:
                 self.stop_button.deleteLater()
