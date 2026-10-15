@@ -2,10 +2,13 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QSize, QTimer
-from PySide6.QtGui import QColor, QPixmap, QFont, QBrush, QPainterPath, QTransform, QPainterPathStroker, QIcon
+from PySide6.QtGui import (
+    QColor, QPixmap, QFont, QBrush, QPainterPath, QTransform, QPainterPathStroker, QIcon,
+    QFontDatabase,
+)
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFormLayout,
-    QFontComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox, QColorDialog, QGridLayout,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox, QColorDialog, QGridLayout,
     QGroupBox, QWidget, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
     QGraphicsRectItem, QGraphicsPathItem, QScrollArea, QLineEdit
 )
@@ -16,6 +19,64 @@ from videotrans.configure.config import ROOT_DIR, tr, defaulelang, settings
 JSON_FILE = f'{ROOT_DIR}/videotrans/ass.json'
 PREVIEW_IMAGE = f'{ROOT_DIR}/videotrans/styles/preview.png'
 
+# Shown first in the font dropdown (Arabic-friendly + common hardsub fonts).
+PREFERRED_FONTS = (
+    'Tahoma',
+    'Geeza Pro',
+    'Arial Unicode MS',
+    'Arial',
+    'DecoType Naskh',
+    'Damascus',
+    'Noto Naskh Arabic',
+    'Noto Sans Arabic',
+    'Segoe UI',
+    'Microsoft Sans Serif',
+)
+
+
+def _installed_font_families() -> list:
+    try:
+        return list(QFontDatabase.families())
+    except Exception:
+        return ['Arial']
+
+
+def _make_font_combo(on_change=None) -> QComboBox:
+    """Dropdown of system fonts with preferred names on top (still editable)."""
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    combo.setMinimumHeight(30)
+    installed = _installed_font_families()
+    installed_set = {f.lower(): f for f in installed}
+    preferred = []
+    for name in PREFERRED_FONTS:
+        real = installed_set.get(name.lower())
+        if real and real not in preferred:
+            preferred.append(real)
+    if preferred:
+        combo.addItems(preferred)
+        combo.insertSeparator(len(preferred))
+    others = sorted(f for f in installed if f not in preferred)
+    combo.addItems(others)
+    if on_change:
+        combo.currentTextChanged.connect(on_change)
+    return combo
+
+
+def _set_font_combo_text(combo: QComboBox, name: str) -> None:
+    name = (name or 'Arial').strip() or 'Arial'
+    idx = combo.findText(name)
+    if idx < 0:
+        # Case-insensitive match (macOS family names vary).
+        for i in range(combo.count()):
+            if combo.itemText(i).lower() == name.lower():
+                idx = i
+                break
+    if idx >= 0:
+        combo.setCurrentIndex(idx)
+    else:
+        combo.setEditText(name)
 
 
 DEFAULT_STYLE = {
@@ -318,11 +379,10 @@ class SET_ASS(QDialog):
         self.form_group = QGroupBox('')
         self.form_layout = QFormLayout()
 
-        # Font
-        self.font_combo = QFontComboBox()
-        self.font_combo.currentFontChanged.connect(self.update_preview)
+        # Font — dropdown with Tahoma/Geeza/… first; still editable for custom names.
+        self.font_combo = _make_font_combo(self.update_preview)
         self.form_layout.addRow(tr("font"), self.font_combo)
-        self.bottom_font_combo = QFontComboBox()
+        self.bottom_font_combo = _make_font_combo()
         self.form_layout.addRow(tr("bottom_font"), self.bottom_font_combo)
 
         # Font size
@@ -542,8 +602,8 @@ class SET_ASS(QDialog):
             self.cjk_len.setText(str(settings.get("cjk_len")))
             self.other_len.setText(str(settings.get("other_len")))
 
-            self.font_combo.setCurrentFont(style.get('Fontname', 'Arial'))
-            self.bottom_font_combo.setCurrentFont(style.get('Bottom_Fontname', 'Arial'))
+            _set_font_combo_text(self.font_combo, style.get('Fontname', 'Arial'))
+            _set_font_combo_text(self.bottom_font_combo, style.get('Bottom_Fontname', 'Arial'))
             self.font_size_spin.setValue(style.get('Fontsize', 16))
             self.bottom_font_size_spin.setValue(style.get('Bottom_Fontsize', 16))
             self.primary_color_picker.color = ColorPicker.parse_color(style.get('PrimaryColour', '&H00FFFFFF&'))
@@ -598,8 +658,8 @@ class SET_ASS(QDialog):
         style = DEFAULT_STYLE
         self.blockSignals(True)
         try:
-            self.font_combo.setCurrentFont(style['Fontname'])
-            self.bottom_font_combo.setCurrentFont(style['Bottom_Fontname'])
+            _set_font_combo_text(self.font_combo, style['Fontname'])
+            _set_font_combo_text(self.bottom_font_combo, style['Bottom_Fontname'])
             self.font_size_spin.setValue(style['Fontsize'])
             self.bottom_font_size_spin.setValue(style['Bottom_Fontsize'])
             self.primary_color_picker.color = ColorPicker.parse_color(style['PrimaryColour'])
