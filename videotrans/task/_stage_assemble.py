@@ -414,15 +414,15 @@ class AssembleMixin:
             logger.warning('floating_channel enabled but channel name empty; skip')
             return
         text = self._escape_drawtext(name)
-        # Slow Lissajous drift (~90–120s period), low opacity so it barely distracts.
-        # Keep away from edges a bit; size scales with frame height.
+        # Near-invisible: only noticeable if you look for it; motion is very slow
+        # so viewers following the story rarely catch it drifting.
         vf = (
             f"drawtext=text='{text}'"
-            f":fontsize='max(16\\,h/40)'"
-            f":fontcolor=white@0.22"
-            f":borderw=1:bordercolor=black@0.12"
-            f":x='(w-text_w)/2+(w*0.30)*sin(2*PI*t/100)'"
-            f":y='(h-text_h)/2+(h*0.26)*cos(2*PI*t/130)'"
+            f":fontsize='max(14\\,h/48)'"
+            f":fontcolor=white@0.08"
+            f":borderw=0"
+            f":x='(w-text_w)/2+(w*0.28)*sin(2*PI*t/180)'"
+            f":y='(h-text_h)/2+(h*0.24)*cos(2*PI*t/220)'"
         )
         out = Path(self.cfg.cache_folder) / f'channel_wm_out{Path(mp4_path).suffix}'
         self.signal(text=tr('Embedding floating channel name...'))
