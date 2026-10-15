@@ -390,11 +390,65 @@ class AssembleMixin:
 
         if self.cfg.targetdir_mp4 and Path(self.cfg.targetdir_mp4).exists():
             self._apply_embed_logo(self.cfg.targetdir_mp4)
+            self._apply_floating_channel(self.cfg.targetdir_mp4)
 
         while output_source_output is not True:
             if app_cfg.exit_soft:return
             time.sleep(1)
         return
+
+    @staticmethod
+    def _escape_drawtext(text: str) -> str:
+        """Escape text for ffmpeg drawtext filter."""
+        s = str(text or '')
+        for a, b in (('\\', r'\\'), (':', r'\:'), ("'", r"\'"), ('%', '%%')):
+            s = s.replace(a, b)
+        return s
+
+    def _apply_floating_channel(self, mp4_path: str) -> None:
+        """Slow, faint channel name drifting around the frame (optional)."""
+        if not getattr(self.cfg, 'floating_channel', False):
+            return
+        name = (getattr(self.cfg, 'channel_name', None) or '').strip()
+        if not name:
+            logger.warning('floating_channel enabled but channel name empty; skip')
+            return
+        text = self._escape_drawtext(name)
+        # Slow Lissajous drift (~90–120s period), low opacity so it barely distracts.
+        # Keep away from edges a bit; size scales with frame height.
+        vf = (
+            f"drawtext=text='{text}'"
+            f":fontsize='max(16\\,h/40)'"
+            f":fontcolor=white@0.22"
+            f":borderw=1:bordercolor=black@0.12"
+            f":x='(w-text_w)/2+(w*0.30)*sin(2*PI*t/100)'"
+            f":y='(h-text_h)/2+(h*0.26)*cos(2*PI*t/130)'"
+        )
+        out = Path(self.cfg.cache_folder) / f'channel_wm_out{Path(mp4_path).suffix}'
+        self.signal(text=tr('Embedding floating channel name...'))
+        codec = getattr(self, 'video_codec_num', None) or 264
+        cmd = [
+            '-y',
+            '-i', os.path.normpath(mp4_path),
+            '-vf', vf,
+            '-c:v', f'libx{codec}',
+            '-crf', f'{settings.get("crf", 23)}',
+            '-preset', f'{settings.get("preset", "fast")}',
+            '-c:a', 'copy',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            str(out),
+        ]
+        try:
+            runffmpeg(cmd, cmd_dir=self.cfg.cache_folder, force_cpu=True)
+            if out.exists() and out.stat().st_size > 0:
+                shutil.move(str(out), mp4_path)
+            else:
+                logger.warning('Floating channel watermark produced empty file; keep original')
+                out.unlink(missing_ok=True)
+        except Exception as e:
+            logger.exception(f'Floating channel watermark failed, keep original: {e}', exc_info=True)
+            out.unlink(missing_ok=True)
 
     def _apply_embed_logo(self, mp4_path: str) -> None:
         """Overlay logo/watermark on the final translated video (optional)."""

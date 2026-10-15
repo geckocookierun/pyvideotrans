@@ -223,5 +223,8 @@ class WinActionBaseModeMixin:
             self.main.logo_pos.setDisabled(type)
             self.main.logo_size.setDisabled(type)
             self.main.logo_margin.setDisabled(type)
+        if hasattr(self.main, 'floating_channel'):
+            self.main.floating_channel.setDisabled(type)
+            self.main.channel_name.setDisabled(type)
         self.main.addbackbtn.setDisabled(True if self.main.app_mode in ['tiqu'] else type)
         self.main.back_audio.setReadOnly(True if self.main.app_mode in ['tiqu'] else type)

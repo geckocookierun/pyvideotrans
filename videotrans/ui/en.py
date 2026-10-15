@@ -4,6 +4,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import QSizePolicy, QApplication, QPlainTextEdit
 
+from videotrans.configure import constants as ui_constants
 from videotrans.configure.config import tr, settings
 from videotrans.ui._setup_menus import _setup_actions_and_menus
 from videotrans.ui._setup_rows import (
@@ -160,6 +161,17 @@ class Ui_MainWindow(object):
         self.logo_margin.setToolTip(tr("Distance of watermark from left or right side"))
         self.logo_margin.setVisible(False)
 
+        self.floating_channel = QtWidgets.QCheckBox(self.layoutWidget)
+        self.floating_channel.setMinimumSize(QtCore.QSize(0, 30))
+        self.floating_channel.setObjectName("floating_channel")
+        self.floating_channel.setVisible(False)
+
+        self.channel_name = QtWidgets.QComboBox()
+        self.channel_name.addItems(list(ui_constants.CHANNEL_NAMES))
+        self.channel_name.setMinimumWidth(140)
+        self.channel_name.setToolTip(tr("Channel name for the floating watermark"))
+        self.channel_name.setVisible(False)
+
         self.bgm_layout.addWidget(self.is_separate)
         self.bgm_layout.addWidget(self.embed_bgm)
         self.bgm_layout.addWidget(self.keep_original_audio)
@@ -181,6 +193,8 @@ class Ui_MainWindow(object):
         self.bgm_layout.addWidget(self.logo_pos)
         self.bgm_layout.addWidget(self.logo_size)
         self.bgm_layout.addWidget(self.logo_margin)
+        self.bgm_layout.addWidget(self.floating_channel)
+        self.bgm_layout.addWidget(self.channel_name)
 
         self.enable_diariz = QtWidgets.QCheckBox()
         self.enable_diariz.setToolTip(tr("Speaker classification language"))
@@ -444,6 +458,9 @@ class Ui_MainWindow(object):
         self.embed_logo.setText(tr("Embed logo"))
         self.embed_logo.setToolTip(tr(
             "Overlay a PNG/JPG logo on the final translated video (same as Tools → watermark)."))
+        self.floating_channel.setText(tr("Floating channel name"))
+        self.floating_channel.setToolTip(tr(
+            "Slow faint channel name that drifts around the video so it barely distracts viewers."))
         self.startbtn.setText(tr("Start"))
         self.addbackbtn.setText(tr("Add background audio"))
         self.addbackbtn.setToolTip(

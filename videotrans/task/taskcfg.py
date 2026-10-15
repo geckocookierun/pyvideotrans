@@ -243,6 +243,8 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     logo_pos: int = 0  # 0左上 1右上 2右下 3左下 4居中
     logo_size: str = "80x80"  # 宽x高
     logo_margin: int = 10  # 边距像素
+    floating_channel: bool = False  # 成片漂浮频道名水印
+    channel_name: str = "Gamma Arabicsub"  # 漂浮频道名
     original_wav: Union[os.PathLike, str] = None  # 用于叠加的原始音轨(立体声)
     instrument: Union[os.PathLike, str] = None  # 分离出的背景音频
     vocal: Union[os.PathLike, str] = None  # 分离出的人声音频
@@ -342,6 +344,8 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
                     f'已选 嵌入Logo, {self.logo_path}, 位置{getattr(self, "logo_pos", 0)}, '
                     f'尺寸{getattr(self, "logo_size", "80x80")}, 边距{getattr(self, "logo_margin", 10)}'
                 )
+            if getattr(self, 'floating_channel', False):
+                _msg.append(f'已选 漂浮频道名: {getattr(self, "channel_name", "")}')
             if self.is_separate or self.background_music or _vocal_exists or _instr_exists:
 
                 _str = f"{isTrue[self.is_separate]} 分离人声与背景声"

@@ -85,6 +85,8 @@ class AppParams:
             "logo_pos": 0,
             "logo_size": "80x80",
             "logo_margin": 10,
+            "floating_channel": False,
+            "channel_name": "Gamma Arabicsub",
             "third_person_narration": False,
             "narration_mode": "none",
             "narration_style": "third",

@@ -5,6 +5,10 @@ from ._languages_dict import LISTEN_TEXT, LANGUAGE_M2M100, LANGUAGE_FIRERED3, LA
 VIDEO_EXTS = ["mp4", "mkv", "mpeg", "avi", "mov", "mts", "webm", "ogg", "ts", "flv", "wmv"]
 # 支持的音频格式
 AUDIO_EXITS = ["mp3", "wav", "aac", "flac", "m4a", "ogg", "wma"]
+# Channel names for floating text watermark (extend as needed)
+CHANNEL_NAMES = [
+    "Gamma Arabicsub",
+]
 
 
 # -----------语音识别模型-----------------

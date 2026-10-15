@@ -202,6 +202,13 @@ class WinActionCheckMixin:
                 show_error(tr("Please select a logo/watermark image"))
                 self.main.startbtn.setDisabled(False)
                 return
+        self.cfg['floating_channel'] = bool(
+            hasattr(self.main, 'floating_channel') and self.main.floating_channel.isChecked()
+        )
+        self.cfg['channel_name'] = (
+            self.main.channel_name.currentText().strip()
+            if hasattr(self.main, 'channel_name') else 'Gamma Arabicsub'
+        ) or 'Gamma Arabicsub'
         self.cfg['is_separate'] = self.main.is_separate.isChecked()
         self.cfg['embed_bgm'] = self.main.embed_bgm.isChecked()
         self.cfg['background_music'] = self.main.back_audio.text().strip()

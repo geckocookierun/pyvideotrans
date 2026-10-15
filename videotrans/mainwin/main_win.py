@@ -157,6 +157,14 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
             self.logo_pos.setCurrentIndex(int(params.get('logo_pos', 0) or 0))
             self.logo_size.setText(str(params.get('logo_size', '80x80') or '80x80'))
             self.logo_margin.setText(str(params.get('logo_margin', 10)))
+        if hasattr(self, 'floating_channel'):
+            self.floating_channel.setChecked(bool(params.get('floating_channel', False)))
+            name = str(params.get('channel_name', 'Gamma Arabicsub') or 'Gamma Arabicsub')
+            idx = self.channel_name.findText(name)
+            if idx < 0:
+                self.channel_name.addItem(name)
+                idx = self.channel_name.findText(name)
+            self.channel_name.setCurrentIndex(idx if idx >= 0 else 0)
         self.rephrase.setChecked(bool(params.get('rephrase', False)))
         if hasattr(self, 'narration_mode'):
             mode = params.get('narration_mode')
