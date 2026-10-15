@@ -130,6 +130,8 @@ class WinActionBaseModeMixin:
         self.show_adv_status = not self.show_adv_status
         self.hide_show_element(self.main.bgm_layout, self.show_adv_status)
         self.hide_show_element(self.main.dubb_thread_layout, self.show_adv_status)
+        if hasattr(self.main, 'brand_layout'):
+            self.hide_show_element(self.main.brand_layout, self.show_adv_status)
         self.main.advcontainer.setVisible(self.show_adv_status)
 
     @staticmethod
