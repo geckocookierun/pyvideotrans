@@ -9,6 +9,10 @@ AUDIO_EXITS = ["mp3", "wav", "aac", "flac", "m4a", "ogg", "wma"]
 CHANNEL_NAMES = [
     "Gamma Arabicsub",
 ]
+# Bundled default logo PNG (relative to ROOT_DIR); wide Gamma Arabicsub mark
+DEFAULT_CHANNEL_LOGO = "videotrans/styles/gamma_arabicsub_logo.png"
+# Default overlay size keeps ~3.3:1 aspect of the wide logo
+DEFAULT_CHANNEL_LOGO_SIZE = "240x73"
 
 
 # -----------语音识别模型-----------------

@@ -241,7 +241,7 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     embed_logo: bool = False  # 最终成片叠加 logo/水印
     logo_path: Union[os.PathLike, str] = None  # logo 图片路径
     logo_pos: int = 0  # 0左上 1右上 2右下 3左下 4居中
-    logo_size: str = "80x80"  # 宽x高
+    logo_size: str = "240x73"  # 宽x高 (Gamma Arabicsub wide logo)
     logo_margin: int = 10  # 边距像素
     floating_channel: bool = False  # 成片漂浮频道名水印
     channel_name: str = "Gamma Arabicsub"  # 漂浮频道名

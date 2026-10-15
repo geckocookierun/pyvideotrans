@@ -1,4 +1,5 @@
 import platform
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, Signal, QTimer
@@ -150,10 +151,14 @@ class Ui_MainWindow(object):
         self.logo_pos.setVisible(False)
 
         self.logo_size = QtWidgets.QLineEdit()
-        self.logo_size.setText('80x80')
+        self.logo_size.setText(ui_constants.DEFAULT_CHANNEL_LOGO_SIZE)
         self.logo_size.setMaximumWidth(70)
         self.logo_size.setToolTip(tr("Watermark width x height"))
         self.logo_size.setVisible(False)
+
+        _logo_file = Path(__file__).resolve().parents[2] / ui_constants.DEFAULT_CHANNEL_LOGO
+        if _logo_file.is_file():
+            self.logo_path.setText(_logo_file.as_posix())
 
         self.logo_margin = QtWidgets.QLineEdit()
         self.logo_margin.setText('10')

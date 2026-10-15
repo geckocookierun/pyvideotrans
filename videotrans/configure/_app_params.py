@@ -12,7 +12,8 @@ from videotrans.configure.constants import (
     OPENAITTS_ROLES, GEMINI_TTS_MODELS,
     XIAOMI_MODELS, XIAOMI_TTS_MODELS, ELEVENLABS_TTS_MODELS,
     MINIMAX_TTS_MODELS, MINIMAX_MODELS,
-    SILICONFLOW_TTS_MODELS, OPENROUTER_TTS_MODELS, GEMINI_MODELS
+    SILICONFLOW_TTS_MODELS, OPENROUTER_TTS_MODELS, GEMINI_MODELS,
+    DEFAULT_CHANNEL_LOGO, DEFAULT_CHANNEL_LOGO_SIZE,
 )
 
 # Module-level reference to settings singleton, set by config.py
@@ -81,9 +82,9 @@ class AppParams:
             "cover_source_hardsub": False,
             "cover_source_hardsub_pct": 0.14,
             "embed_logo": False,
-            "logo_path": "",
+            "logo_path": f"{ROOT_DIR}/{DEFAULT_CHANNEL_LOGO}",
             "logo_pos": 0,
-            "logo_size": "80x80",
+            "logo_size": DEFAULT_CHANNEL_LOGO_SIZE,
             "logo_margin": 10,
             "floating_channel": False,
             "channel_name": "Gamma Arabicsub",

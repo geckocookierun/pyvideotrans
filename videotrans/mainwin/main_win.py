@@ -152,10 +152,20 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
             self.cover_source_hardsub.setChecked(bool(params.get('cover_source_hardsub', False)))
             self.cover_hardsub_pct.setText(str(params.get('cover_source_hardsub_pct', 0.14)))
         if hasattr(self, 'embed_logo'):
+            from pathlib import Path as _Path
+            from videotrans.configure.config import ROOT_DIR
+            from videotrans.configure.constants import DEFAULT_CHANNEL_LOGO, DEFAULT_CHANNEL_LOGO_SIZE
+            _default_logo = _Path(ROOT_DIR) / DEFAULT_CHANNEL_LOGO
             self.embed_logo.setChecked(bool(params.get('embed_logo', False)))
-            self.logo_path.setText(str(params.get('logo_path', '') or ''))
+            logo = str(params.get('logo_path', '') or '').strip()
+            if not logo or not _Path(logo).is_file():
+                logo = _default_logo.as_posix() if _default_logo.is_file() else ''
+            self.logo_path.setText(logo)
             self.logo_pos.setCurrentIndex(int(params.get('logo_pos', 0) or 0))
-            self.logo_size.setText(str(params.get('logo_size', '80x80') or '80x80'))
+            size = str(params.get('logo_size', '') or '').strip()
+            if not size or size == '80x80':
+                size = DEFAULT_CHANNEL_LOGO_SIZE
+            self.logo_size.setText(size)
             self.logo_margin.setText(str(params.get('logo_margin', 10)))
         if hasattr(self, 'floating_channel'):
             self.floating_channel.setChecked(bool(params.get('floating_channel', False)))
