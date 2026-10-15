@@ -416,9 +416,10 @@ class AssembleMixin:
         text = self._escape_drawtext(name)
         # Near-invisible: only noticeable if you look for it; motion is very slow
         # so viewers following the story rarely catch it drifting.
+        # Font ~h/28 (was h/48) — still soft, but readable when paused.
         vf = (
             f"drawtext=text='{text}'"
-            f":fontsize='max(14\\,h/48)'"
+            f":fontsize='max(22\\,h/28)'"
             f":fontcolor=white@0.08"
             f":borderw=0"
             f":x='(w-text_w)/2+(w*0.28)*sin(2*PI*t/180)'"
@@ -472,12 +473,14 @@ class AssembleMixin:
             pos = int(getattr(self.cfg, 'logo_pos', 0) or 0)
         except (TypeError, ValueError):
             pos = 0
+        # overlay filter: W/H = main video, w/h = overlay. Using bare `w` for the
+        # main width wrongly resolves to overlay_w and pins every corner to the left.
         positions = [
-            f"{margin}:{margin}",
-            f"(w-overlay_w-{margin}):{margin}",
-            f"(w-overlay_w-{margin}):(h-overlay_h-{margin})",
-            f"{margin}:(h-overlay_h-{margin})",
-            f"(w-overlay_w)/2:(h-overlay_h)/2",
+            f"{margin}:{margin}",  # upper left
+            f"W-w-{margin}:{margin}",  # upper right
+            f"W-w-{margin}:H-h-{margin}",  # bottom right
+            f"{margin}:H-h-{margin}",  # bottom left
+            f"(W-w)/2:(H-h)/2",  # center
         ]
         position = positions[pos if 0 <= pos < len(positions) else 0]
         out = Path(self.cfg.cache_folder) / f'logo_out{Path(mp4_path).suffix}'

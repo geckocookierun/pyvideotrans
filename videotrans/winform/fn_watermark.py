@@ -81,12 +81,13 @@ def openwin():
 
                 # 计算水印位置
                 duration = get_video_duration(video)
+                # overlay: W/H = main video, w/h = overlay (bare w ≠ main width)
                 positions = [
                     f"{self.x}:{self.y}",  # 左上角
-                    f"(w-overlay_w-{self.x}):{self.y}",  # 右上角
-                    f"(w-overlay_w-{self.x}):(h-overlay_h-{self.y})",  # 右下角
-                    f"{self.x}:(h-overlay_h-{self.y})",  # 左下角
-                    f"(w-overlay_w)/2:(h-overlay_h)/2"  # 中心
+                    f"W-w-{self.x}:{self.y}",  # 右上角
+                    f"W-w-{self.x}:H-h-{self.y}",  # 右下角
+                    f"{self.x}:H-h-{self.y}",  # 左下角
+                    f"(W-w)/2:(H-h)/2"  # 中心
                 ]
 
                 position = positions[self.pos]
