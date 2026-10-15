@@ -162,8 +162,12 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
             self.keep_original_audio.setChecked(bool(params.get('keep_original_audio', False)))
             self.original_volume.setText(str(params.get('original_audio_volume', 0.3)))
         if hasattr(self, 'cover_source_hardsub'):
+            from videotrans.task._stage_assemble import _format_cover_hardsub_pct
             self.cover_source_hardsub.setChecked(bool(params.get('cover_source_hardsub', False)))
-            self.cover_hardsub_pct.setText(str(params.get('cover_source_hardsub_pct', 0.14)))
+            # Always display as integer percent (11), never 0.11
+            self.cover_hardsub_pct.setText(
+                _format_cover_hardsub_pct(params.get('cover_source_hardsub_pct', 0.14))
+            )
         if hasattr(self, 'embed_logo'):
             from pathlib import Path as _Path
             from videotrans.configure.config import ROOT_DIR

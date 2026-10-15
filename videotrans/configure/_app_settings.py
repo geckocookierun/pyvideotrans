@@ -188,7 +188,7 @@ class AppSettings:
             "repetition_penalty": 1.0,
             "compression_ratio_threshold": 2.4,
 
-            "show_more_settings": False,
+            "show_more_settings": True,
             "speaker_type": "built",
             "hf_token": "",
             "cjk_len": 15,

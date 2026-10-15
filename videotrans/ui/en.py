@@ -114,15 +114,15 @@ class Ui_MainWindow(object):
         self.cover_source_hardsub.setVisible(False)
 
         self.cover_hardsub_pct_label = QtWidgets.QLabel()
-        self.cover_hardsub_pct_label.setText(tr("Cover height"))
+        self.cover_hardsub_pct_label.setText(tr("Cover %"))
         self.cover_hardsub_pct_label.setVisible(False)
         self.cover_hardsub_pct = QtWidgets.QLineEdit()
-        self.cover_hardsub_pct.setText('0.14')
-        self.cover_hardsub_pct.setMaximumWidth(60)
+        self.cover_hardsub_pct.setText('14')
+        self.cover_hardsub_pct.setMaximumWidth(40)
         self.cover_hardsub_pct.setVisible(False)
         self.cover_hardsub_pct.setToolTip(
-            tr("Bottom cover height as a fraction of frame height, e.g. 0.14 = bottom 14%"))
-        # Accept 0.14 or 14; values >1 are percent (see _normalize_cover_hardsub_pct).
+            tr("Bottom cover height as percent of frame, e.g. 11 = bottom 11% (range 5–35)"))
+        # UI always shows integer percent; parser also accepts legacy 0.11 / 11%.
 
         self.embed_logo = QtWidgets.QCheckBox(self.layoutWidget)
         self.embed_logo.setMinimumSize(QtCore.QSize(0, 30))
@@ -177,6 +177,7 @@ class Ui_MainWindow(object):
         self.channel_name.setToolTip(tr("Channel name for the floating watermark"))
         self.channel_name.setVisible(False)
 
+        # Advanced rows (split so controls are not cramped on one line)
         self.bgm_layout.addWidget(self.is_separate)
         self.bgm_layout.addWidget(self.embed_bgm)
         self.bgm_layout.addWidget(self.keep_original_audio)
@@ -185,15 +186,18 @@ class Ui_MainWindow(object):
         self.bgm_layout.addWidget(self.is_loop_bgm)
         self.bgm_layout.addWidget(self.bgmvolume_label)
         self.bgm_layout.addWidget(self.bgmvolume)
+        self.bgm_layout.addStretch()
 
-        self.bgm_layout.addWidget(self.addbackbtn)
-        self.bgm_layout.addWidget(self.back_audio)
-        self.bgm_layout.addWidget(self.set_ass)
-        self.bgm_layout.addWidget(self.cover_source_hardsub)
-        self.bgm_layout.addWidget(self.cover_hardsub_pct_label)
-        self.bgm_layout.addWidget(self.cover_hardsub_pct)
+        self.cover_layout = QtWidgets.QHBoxLayout()
+        self.cover_layout.setObjectName("cover_layout")
+        self.cover_layout.addWidget(self.addbackbtn)
+        self.cover_layout.addWidget(self.back_audio)
+        self.cover_layout.addWidget(self.set_ass)
+        self.cover_layout.addWidget(self.cover_source_hardsub)
+        self.cover_layout.addWidget(self.cover_hardsub_pct_label)
+        self.cover_layout.addWidget(self.cover_hardsub_pct)
+        self.cover_layout.addStretch()
 
-        # Logo + floating channel on their own Advanced row (keeps BGM row readable)
         self.brand_layout = QtWidgets.QHBoxLayout()
         self.brand_layout.setObjectName("brand_layout")
         self.brand_layout.addWidget(self.embed_logo)
@@ -202,9 +206,13 @@ class Ui_MainWindow(object):
         self.brand_layout.addWidget(self.logo_pos)
         self.brand_layout.addWidget(self.logo_size)
         self.brand_layout.addWidget(self.logo_margin)
-        self.brand_layout.addWidget(self.floating_channel)
-        self.brand_layout.addWidget(self.channel_name)
         self.brand_layout.addStretch()
+
+        self.float_layout = QtWidgets.QHBoxLayout()
+        self.float_layout.setObjectName("float_layout")
+        self.float_layout.addWidget(self.floating_channel)
+        self.float_layout.addWidget(self.channel_name)
+        self.float_layout.addStretch()
 
         self.enable_diariz = QtWidgets.QCheckBox()
         self.enable_diariz.setToolTip(tr("Speaker classification language"))
@@ -279,7 +287,9 @@ class Ui_MainWindow(object):
 
         self.adv_layout_outer.addLayout(self.dubb_thread_layout)
         self.adv_layout_outer.addLayout(self.bgm_layout)
+        self.adv_layout_outer.addLayout(self.cover_layout)
         self.adv_layout_outer.addLayout(self.brand_layout)
+        self.adv_layout_outer.addLayout(self.float_layout)
         self.verticalLayout_3.addWidget(self.advcontainer)
         self.advcontainer.setVisible(False)
 

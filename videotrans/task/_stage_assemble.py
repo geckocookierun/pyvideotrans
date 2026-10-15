@@ -16,15 +16,25 @@ from videotrans.util.help_misc import vail_file, read_last_n_lines, is_novoice_m
 
 
 def _normalize_cover_hardsub_pct(raw) -> float:
-    """Parse Cover height: 0.14 or 14 both mean 14% of frame. Values >1 are treated as percent."""
+    """Parse Cover height into a 0–1 fraction.
+
+    UI always displays an integer percent (e.g. 11). Accepts legacy forms too:
+    0.11 / .11 / 11 / 11% → 0.11.
+    """
     try:
         s = str(raw).strip().rstrip('%').strip()
         pct = float(s)
     except (TypeError, ValueError):
         return 0.14
+    # Values >1 are percent (11 → 0.11). Exactly 1.0 means 100% → clamp to max.
     if pct > 1.0:
         pct = pct / 100.0
     return min(0.35, max(0.05, pct))
+
+
+def _format_cover_hardsub_pct(raw) -> str:
+    """Always show Cover height as integer percent text, e.g. '11'."""
+    return str(int(round(_normalize_cover_hardsub_pct(raw) * 100)))
 
 
 class AssembleMixin:

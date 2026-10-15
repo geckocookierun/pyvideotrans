@@ -67,9 +67,14 @@ class WinActionBaseMiscMixin:
             hasattr(m, 'cover_source_hardsub') and m.cover_source_hardsub.isChecked()
         )
         try:
-            from videotrans.task._stage_assemble import _normalize_cover_hardsub_pct
+            from videotrans.task._stage_assemble import (
+                _normalize_cover_hardsub_pct,
+                _format_cover_hardsub_pct,
+            )
             raw = m.cover_hardsub_pct.text() if hasattr(m, 'cover_hardsub_pct') else 0.14
             data['cover_source_hardsub_pct'] = _normalize_cover_hardsub_pct(raw)
+            if hasattr(m, 'cover_hardsub_pct'):
+                m.cover_hardsub_pct.setText(_format_cover_hardsub_pct(data['cover_source_hardsub_pct']))
         except (TypeError, ValueError):
             data['cover_source_hardsub_pct'] = 0.14
         data['embed_logo'] = bool(hasattr(m, 'embed_logo') and m.embed_logo.isChecked())

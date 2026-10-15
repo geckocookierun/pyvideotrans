@@ -67,8 +67,7 @@ class WinActionBaseModeMixin:
             self.main.remove_silent_mid.setVisible(False)
             self.main.align_sub_audio.setVisible(False)
 
-        self.show_adv_status = True
-        self.toggle_adv()
+        self.set_adv_visible(True)
 
     def set_tiquzimu(self):
         self.main.action_tiquzimu.setChecked(True)
@@ -123,16 +122,29 @@ class WinActionBaseModeMixin:
         if platform.system() != 'Darwin':
             self.main.enable_cuda.show()
 
-        self.show_adv_status = True
-        self.toggle_adv()
+        self.set_adv_visible(True)
 
-    def toggle_adv(self):
-        self.show_adv_status = not self.show_adv_status
-        self.hide_show_element(self.main.bgm_layout, self.show_adv_status)
+    def set_adv_visible(self, visible: bool):
+        """Show or hide the Advanced block without flipping state."""
+        self.show_adv_status = bool(visible)
         self.hide_show_element(self.main.dubb_thread_layout, self.show_adv_status)
+        self.hide_show_element(self.main.bgm_layout, self.show_adv_status)
+        if hasattr(self.main, 'cover_layout'):
+            self.hide_show_element(self.main.cover_layout, self.show_adv_status)
         if hasattr(self.main, 'brand_layout'):
             self.hide_show_element(self.main.brand_layout, self.show_adv_status)
+        if hasattr(self.main, 'float_layout'):
+            self.hide_show_element(self.main.float_layout, self.show_adv_status)
         self.main.advcontainer.setVisible(self.show_adv_status)
+
+    def toggle_adv(self):
+        self.set_adv_visible(not self.show_adv_status)
+        try:
+            from videotrans.configure.config import settings
+            settings['show_more_settings'] = self.show_adv_status
+            settings.save()
+        except Exception:
+            pass
 
     @staticmethod
     def hide_show_element(wrap_layout, show_status):

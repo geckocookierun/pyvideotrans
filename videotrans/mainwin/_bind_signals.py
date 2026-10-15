@@ -62,8 +62,10 @@ class BindSignalsMixin:
             self.restart_btn.setCursor(Qt.PointingHandCursor)
 
             SignalHub.instance().new_message.connect(self.win_action.update_data)
-            if settings.get('show_more_settings'):
-                self.win_action.toggle_adv()
+            # Advanced expanded by default (still toggle-able via More settings)
+            self.win_action.set_adv_visible(True)
+            settings['show_more_settings'] = True
+            settings.save()
 
             self.win_action.tts_type_change(self.tts_type.currentIndex())
             _role = params.get('voice_role') or 'No'
