@@ -46,6 +46,11 @@ _CALIB_SAMPLES = {
     'pt': 'O narrador diz que a jovem recusou firmemente o casamento apesar dos pedidos do pai e da lembrança de um favor antigo.',
     'id': 'Narator mengatakan bahwa gadis itu menolak pernikahan itu dengan tegas meskipun ayahnya terus membujuk dan mengingat jasa lama.',
     'ru': 'Рассказчик говорит, что девушка твёрдо отказалась от этого брака, несмотря на уговоры отца и упоминание о старом одолжении.',
+    # MSA (Modern Standard Arabic) — used only to measure Edge-TTS speaking pace.
+    'ar': (
+        'يقول الراوي إن الفتاة رفضت هذا الزواج بشدة رغم إلحاح أبيها '
+        'وتذكيره بفضل قديم عليه.'
+    ),
 }
 
 
@@ -158,6 +163,7 @@ def _lang_code_key(lang_code: str, lang_name: str = '') -> str:
         ('viet', 'vi'), ('english', 'en'), ('chinese', 'zh'), ('japanese', 'ja'),
         ('korean', 'ko'), ('thai', 'th'), ('french', 'fr'), ('german', 'de'),
         ('spanish', 'es'), ('portuguese', 'pt'), ('indonesian', 'id'), ('russian', 'ru'),
+        ('arab', 'ar'),
     )
     for needle, key in mapping:
         if needle in name:
