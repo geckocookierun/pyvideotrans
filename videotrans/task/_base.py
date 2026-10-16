@@ -104,7 +104,7 @@ class BaseTask(BaseCon):
 
             self.signal(text=tr("Re-segmenting..."))
             srt_list = ob.llm_segment(raw_subtitles,step=step)
-            if srt_list and len(srt_list) > len(raw_subtitles) / 2:
+            if srt_list and len(srt_list) == len(raw_subtitles):
                 return srt_list
             logger.error(f'二次识别后LLM重新断句失败，已恢复原样,原始字幕行:{len(raw_subtitles)}, 重新断句后字幕行:{len(srt_list)}\n断句结果:\n{srt_list=}')
         except Exception as e:

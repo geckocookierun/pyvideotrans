@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+from copy import deepcopy
 import re
 import time
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ from videotrans.configure.config import logger, settings, ROOT_DIR, tr
 
 from videotrans.task.taskcfg import SrtItem
 from videotrans.translator._base import BaseTrans
-from videotrans.util._srt_parse import get_subtitle_from_srt, ms_to_time_string
+from videotrans.util._srt_parse import get_subtitle_from_srt, ms_to_time_string, srt_str_to_listdict
 from videotrans.util.help_misc import  get_tanslate_type
 
 
@@ -153,29 +154,32 @@ class OpenAICampat(BaseTrans):
             return result.strip()
             
         
-        new_sublist = []
+        _srtlist = []
         logger.debug(f'LLM纠错前:{srt_list=}')
         for idx in range(0, len(srt_list), chunk_size):
             self.signal(text=f'[{idx}] {self.ainame} ' + tr("Re-segmenting..."))
+            batch = srt_list[idx:idx + chunk_size]
             srt_str = "\n\n".join(
-                [f"{line + 1}\n{it['time']}\n{it['text']}" for line, it in enumerate(srt_list[idx: idx + chunk_size])])
-            new_sublist.append(_send(srt_str))
+                f"{line + 1}\n{it['time']}\n{it['text']}" for line, it in enumerate(batch))
+            # Strict parsing: the generic reader fabricates cues for non-SRT text.
+            corrected = srt_str_to_listdict(_send(srt_str))
+            expected = srt_str_to_listdict(srt_str)
+            valid = len(corrected) == len(batch) == len(expected) and all(
+                new['text'].strip() and
+                (new['start_time'], new['end_time']) == (old['start_time'], old['end_time'])
+                for old, new in zip(expected, corrected)
+            )
+            preserved = deepcopy(batch)
+            if valid:
+                for old, new in zip(preserved, corrected):
+                    old['text'] = new['text']
+            else:
+                # Do not spend another request or silently delete uncorrected speech.
+                warning = (f"LLM correction batch {idx + 1}–{idx + len(batch)} "
+                           "returned incomplete or changed subtitle structure; keeping source cues.")
+                logger.warning(warning)
+                self.signal(text=warning)
+            _srtlist.extend(preserved)
 
-        logger.debug(f'LLM纠错后:{new_sublist=}')
-        _srtlist = get_subtitle_from_srt("\n\n".join(new_sublist), is_file=False)
-        # 修正可能存在的时间戳错误
-        _len = len(_srtlist)
-        for i, it in enumerate(_srtlist):
-            _had_edit = False
-            if i < _len - 1 and it['end_time'] > _srtlist[i + 1]['start_time']:
-                it['end_time'] = _srtlist[i + 1]['start_time']
-                _had_edit = True
-            if it['start_time'] > it['end_time']:
-                it['start_time'] = it['end_time']
-                _had_edit = True
-            if _had_edit:
-                it['startraw'] = ms_to_time_string(ms=it['start_time'])
-                it['endraw'] = ms_to_time_string(ms=it['end_time'])
-                it["time"] = f"{it['startraw']} --> {it['endraw']}"
         logger.debug(f'{"【二次识别后】"  if step else ""}LLM纠错完成,原始字幕行:{len(srt_list)}, 新字幕行:{len(_srtlist)}, 用时:{time.time()-_st}s')
         return _srtlist
