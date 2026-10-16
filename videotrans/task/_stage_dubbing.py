@@ -39,6 +39,54 @@ class DubbingMixin:
         if not self.should_dubbing:
             self.signal(text='Skip tts')
             return
+        adaptive = getattr(self.cfg, 'narration_mode', 'none') == 'adaptive'
+        max_rewrites = max(0, int(settings.get('adaptive_rewrite_retries', 2)))
+        attempt = 0
+        while True:
+            self.queue_tts = self._build_tts_queue()
+            if not self.queue_tts:
+                raise RuntimeError(f'字幕长度为0，无法继续配音')
+
+            if len([it.get("ref_wav") for it in self.queue_tts if it.get("ref_wav")]) > 0:
+                self._create_ref_from_vocal()
+
+            run_tts(
+                queue_tts=self.queue_tts,
+                language=self.cfg.target_language_code,
+                uuid=self.uuid,
+                tts_type=self.cfg.tts_type,
+                is_cuda=self.cfg.is_cuda
+            )
+            self._cache_tts_outputs()
+
+            if adaptive:
+                from videotrans.translator._adaptive_dubbing import fit_adaptive_dubbing_from_audio
+                fitted, needs_tts_again = fit_adaptive_dubbing_from_audio(
+                    queue_tts=self.queue_tts,
+                    cache_folder=self.cfg.cache_folder,
+                    translate_type=self.cfg.translate_type,
+                    uuid=self.uuid,
+                    allow_rewrite=attempt < max_rewrites,
+                    allow_soft_speed=bool(self.cfg.voice_autorate),
+                )
+                if fitted:
+                    self._save_srt_target(fitted, self.cfg.target_sub)
+                if needs_tts_again:
+                    attempt += 1
+                    self.signal(text=tr('Adaptive dubbing rewriting...'))
+                    continue
+                if fitted and len(fitted) == len(self.queue_tts):
+                    for queue_item, sub in zip(self.queue_tts, fitted):
+                        queue_item['start_time'] = sub['start_time']
+                        queue_item['end_time'] = sub['end_time']
+                        queue_item['startraw'] = sub['startraw']
+                        queue_item['endraw'] = sub['endraw']
+                        queue_item['time'] = sub['time']
+            break
+
+        self._save_srt_target(self.queue_tts, self.cfg.target_sub)
+
+    def _build_tts_queue(self):
         queue_tts = []
         subs = get_subtitle_from_srt(self.cfg.target_sub)
         source_subs = get_subtitle_from_srt(self.cfg.source_sub)
@@ -89,22 +137,9 @@ class DubbingMixin:
                 tmp_dict['ref_wav'] = f"{self.cfg.cache_folder}/clone-{i}.wav"
                 tmp_dict['ref_language'] = _lang
             queue_tts.append(tmp_dict)
+        return copy.deepcopy(queue_tts)
 
-        self.queue_tts = copy.deepcopy(queue_tts)
-
-        if not self.queue_tts or len(self.queue_tts) < 1:
-            raise RuntimeError(f'字幕长度为0，无法继续配音')
-
-        if len([it.get("ref_wav") for it in self.queue_tts if it.get("ref_wav")]) > 0:
-            self._create_ref_from_vocal()
-
-        run_tts(
-            queue_tts=self.queue_tts,
-            language=self.cfg.target_language_code,
-            uuid=self.uuid,
-            tts_type=self.cfg.tts_type,
-            is_cuda=self.cfg.is_cuda
-        )
+    def _cache_tts_outputs(self):
         outname=None
         if settings.get('save_segment_audio', False):
             outname = self.cfg.target_dir + f'/segment_audio_{self.cfg.noextname}'
@@ -120,5 +155,3 @@ class DubbingMixin:
                     text = re.sub(r'["\'*?\\/|:<>\r\n\t]+', '', it['text'], flags=re.I | re.S)
                     name = f'{outname}/{it["line"]}-{text[:60]}.wav'
                     shutil.copy2(it['filename'], name)
-        
-        self._save_srt_target(self.queue_tts, self.cfg.target_sub)

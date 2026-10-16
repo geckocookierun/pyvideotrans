@@ -147,6 +147,11 @@ class AppSettings:
             "noise_separate_nums": 4,
             "aitrans_temperature": 0.1,
             "aitrans_context": False,
+            "adaptive_scene_gap_ms": 900,
+            "adaptive_scene_max_s": 30,
+            "adaptive_safety_pct": 85,
+            "adaptive_soft_speed_pct": 5,
+            "adaptive_rewrite_retries": 2,
             "batch_nums": 0,
             "uvr_models": "spleeter",
 
@@ -277,6 +282,11 @@ class AppSettings:
             "process_max_gpu",
             "llm_ai_type",
             "retry_nums",
+            "adaptive_scene_gap_ms",
+            "adaptive_scene_max_s",
+            "adaptive_safety_pct",
+            "adaptive_soft_speed_pct",
+            "adaptive_rewrite_retries",
         ]
         try:
             if key in int_type:

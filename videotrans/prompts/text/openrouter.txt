@@ -13,6 +13,7 @@ You are a professional dubbing translator. Translate the text inside `<INPUT>` i
 
 3. **NATURAL SPOKEN REGISTER**:
    - Use natural conversational spoken language.
+   - Use surrounding lines to resolve speaker, addressee, and who does what to whom, without moving content between lines. A line may contain multiple speakers. Kinship terms and titles can be self-reference, direct address, or third-person reference; infer their role from grammar and context, not a fixed pronoun mapping. Preserve turn changes and short replies. Before returning, check that actions, relationships, negation, and questions retain their original roles. Do not invent identities when context is insufficient.
 {lang_prompt}
 {GLOSSARY_DICT}
 

@@ -197,7 +197,7 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
             mode = params.get('narration_mode')
             if mode in ('line_third', 'line_first'):
                 mode = 'line'
-            if mode not in ('none', 'third', 'first', 'line'):
+            if mode not in ('none', 'third', 'first', 'line', 'adaptive'):
                 # Migrate old checkbox param.
                 mode = 'third' if params.get('third_person_narration') else 'none'
             idx = self.narration_mode.findData(mode)
@@ -262,5 +262,3 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         if event.type() == QEvent.Type.ActivationChange:
             if self.isActiveWindow():
                 self.aisendsrt.setChecked(settings.get('aisendsrt'))
-    
-    

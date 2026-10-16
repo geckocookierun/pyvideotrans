@@ -27,14 +27,14 @@ The output must be a clean, dubbing-ready SRT file where every block strictly ma
 
 1. **ZERO-SHIFT FRAGMENT TRANSLATION (NO CROSS-BLOCK MIGRATION)**:
    - Due to natural speech pauses, single sentences are often split across multiple blocks.
-   - **Local Translation Only**: Translate ONLY the words physically present inside each isolated block.
+   - **Local Translation Only**: Use neighboring blocks to understand context, but translate ONLY the content physically present inside the current block.
    - **Do NOT Shift Grammar**: Do NOT shift nouns, verbs, or objects from Block 1 to Block 2 (or vice-versa) to satisfy {lang} grammar.
    - **Punctuation Bridging**: If an input block ends mid-clause, end its translation with an ellipsis (`...`). If the next block continues it, start that translation with an ellipsis (`...`). This keeps the fragments aligned and signals the TTS engine to sustain pitch.
 
 2. **TTS DURATION & AGGRESSIVE COMPRESSION**:
    - The translated text will be converted to audio via TTS. If the line is too long, the voice will sound rushed and desync from the video.
    - Look at the block duration: `Duration = End_Time - Start_Time`. Keep the syllable/character count proportional to this time window.
-   - Strip unnecessary subject pronouns, polite filler, redundant adjectives, and complex connectors. Prefer the shortest, punchiest spoken phrasing.
+   - Strip polite filler, redundant adjectives, and complex connectors. Omit a subject pronoun only if who acts and who receives the action remain unambiguous. Never sacrifice speaker identity or relationships to shorten a line.
 
 3. **NATURAL SPOKEN REGISTER**:
    - Write for the ear, not the eye. Use everyday conversational vocabulary heard in dubbed cinema. Avoid literary syntax or literal translationese.
@@ -79,6 +79,7 @@ Yeah.
 {context_info}
 
 # FINAL OUTPUT CONSTRAINTS
+- Resolve speaker, addressee, and who does what to whom using grammar and surrounding dialogue. A block may contain multiple speakers. Kinship terms and titles can be self-reference, direct address, or third-person reference; do not assign them a fixed pronoun. Preserve turn changes and brief replies. Before returning, check that no action, relationship, negation, or question has reversed roles. Do not invent identities where context is insufficient.
 - Output ONLY the valid SRT text wrapped inside `<TRANSLATE_TEXT>` and `</TRANSLATE_TEXT>`.
 - Do NOT output markdown code blocks (NO ``` or ```srt).
 - Do NOT add any conversational comments, greetings, or explanations.

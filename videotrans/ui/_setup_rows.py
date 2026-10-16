@@ -147,7 +147,7 @@ def _create_translation_row(ui, parent):
         tr("When using AI translation channel, you can translate in srt format, but there may be more empty lines"))
     ui.aisendsrt.setChecked(settings.get('aisendsrt'))
 
-    # none | third/first (scene POV) | line (1:1 full rewrite, keep dialogue voice).
+    # none | third/first (scene POV) | line (legacy) | adaptive dubbing script.
     ui.narration_mode = QtWidgets.QComboBox()
     ui.narration_mode.setObjectName("narration_mode")
     ui.narration_mode.setMinimumWidth(200)
@@ -155,8 +155,9 @@ def _create_translation_row(ui, parent):
     ui.narration_mode.addItem(tr("Narration: third-person"), "third")
     ui.narration_mode.addItem(tr("Narration: first-person (as character)"), "first")
     ui.narration_mode.addItem(tr("Narration: line-by-line (translate then rewrite)"), "line")
+    ui.narration_mode.addItem(tr("Adaptive dubbing rewrite"), "adaptive")
     ui.narration_mode.setToolTip(
-        tr("Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel."))
+        tr("Adaptive dubbing: translate and rewrite each bounded scene, then use real TTS duration to rebuild timestamps while keeping dialogue near the source picture. Requires an AI chat channel."))
     # Legacy alias so older enable/disable hooks keep working.
     ui.third_person_narration = ui.narration_mode
 

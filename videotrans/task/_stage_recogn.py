@@ -111,6 +111,8 @@ class RecognMixin:
         # LLM纠错
         if self.cfg.rephrase:
             self.source_srt_list=self._llmpost(self.source_srt_list)
+            # Translation reads source_sub from disk, not source_srt_list.
+            self._save_srt_target(self.source_srt_list, self.cfg.source_sub)
         
         self._recogn_succeed()
         self.signal(text=tr('endtiquzimu'))

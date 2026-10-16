@@ -208,7 +208,7 @@ class TaskCfgSTS(TaskCfgBase):
     ######## 字幕翻译相关
     translate_type: int = None  # 字幕翻译渠道
     third_person_narration: bool = False  # scene narration on (third or first)
-    narration_mode: str = 'none'  # none | third | first
+    narration_mode: str = 'none'  # none | third | first | line | adaptive
     narration_style: str = 'third'  # third | first (when narration on)
 
     def __repr__(self):

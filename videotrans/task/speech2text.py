@@ -142,6 +142,7 @@ class SpeechToText(BaseTask):
         # LLM纠错
         if self.cfg.rephrase:
             self.source_srt_list=self._llmpost(self.source_srt_list)
+            self._save_srt_target(self.source_srt_list, self.cfg.target_sub)
 
     def diariz(self):
         if self._exit() or not self.cfg.enable_diariz or Path(self.cfg.cache_folder + "/speaker.json").exists():

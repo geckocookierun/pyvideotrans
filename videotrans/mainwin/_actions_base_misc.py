@@ -102,7 +102,7 @@ class WinActionBaseMiscMixin:
             mode = m.narration_mode.currentData() or 'none'
             if mode in ('line_third', 'line_first'):
                 mode = 'line'
-            if mode not in ('none', 'third', 'first', 'line'):
+            if mode not in ('none', 'third', 'first', 'line', 'adaptive'):
                 mode = 'none'
             data['narration_mode'] = mode
             data['third_person_narration'] = mode != 'none'

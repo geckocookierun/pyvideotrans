@@ -247,7 +247,7 @@ class WinActionCheckMixin:
             narration_mode = self.main.narration_mode.currentData() or 'none'
         elif hasattr(self.main, 'third_person_narration') and hasattr(self.main.third_person_narration, 'isChecked'):
             narration_mode = 'third' if self.main.third_person_narration.isChecked() else 'none'
-        _ok_modes = ('none', 'third', 'first', 'line')
+        _ok_modes = ('none', 'third', 'first', 'line', 'adaptive')
         if narration_mode not in _ok_modes:
             # Migrate removed line_third / line_first → line
             if narration_mode in ('line_third', 'line_first'):
@@ -333,4 +333,3 @@ class WinActionCheckMixin:
         _del=r'[%?*"\|<>:]'
         for i,it in enumerate(self.queue_mp4):
             self.queue_mp4[i]=ensure_safe_media_file(it)
-
