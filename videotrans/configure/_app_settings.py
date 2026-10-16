@@ -150,7 +150,8 @@ class AppSettings:
             "adaptive_scene_gap_ms": 900,
             "adaptive_scene_max_s": 30,
             "adaptive_safety_pct": 85,
-            "adaptive_soft_speed_pct": 5,
+            "adaptive_hamed_speed_pct": 20,
+            "adaptive_namminh_speed_pct": 20,
             "adaptive_rewrite_retries": 2,
             "batch_nums": 0,
             "uvr_models": "spleeter",
@@ -285,7 +286,7 @@ class AppSettings:
             "adaptive_scene_gap_ms",
             "adaptive_scene_max_s",
             "adaptive_safety_pct",
-            "adaptive_soft_speed_pct",
+            "adaptive_hamed_speed_pct", "adaptive_namminh_speed_pct",
             "adaptive_rewrite_retries",
         ]
         try:

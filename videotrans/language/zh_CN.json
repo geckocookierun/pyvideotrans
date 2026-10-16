@@ -309,7 +309,6 @@
   "adaptive_scene_gap_ms": "自适应场景分隔静音（毫秒）",
   "adaptive_scene_max_s": "自适应场景最大长度（秒）",
   "adaptive_safety_pct": "自适应首轮时长预算（%）",
-  "adaptive_soft_speed_pct": "自适应最终允许加速（%）",
   "adaptive_rewrite_retries": "自适应TTS超时重写次数",
   "adaptive_scene_gap_ms_title": "自适应场景分隔静音（毫秒）",
   "adaptive_scene_gap_ms_notice": "源字幕之间的间隔达到此时长时开始新场景。",
@@ -317,8 +316,6 @@
   "adaptive_scene_max_s_notice": "发送给自适应翻译改写流程的源场景最大时长。",
   "adaptive_safety_pct_title": "自适应首轮时长预算（%）",
   "adaptive_safety_pct_notice": "首轮改写只使用场景可用时长的这个百分比，为真实TTS时长波动预留空间。",
-  "adaptive_soft_speed_pct_title": "自适应最终允许加速（%）",
-  "adaptive_soft_speed_pct_notice": "测量真实配音后，在启用自动配音加速时允许的最大轻微加速比例。",
   "adaptive_rewrite_retries_title": "自适应TTS超时重写次数",
   "adaptive_rewrite_retries_notice": "测量真实TTS音频后，超时场景可缩写并重新配音的次数。",
   "Rewrite scenes as narration instead of line-by-line translation, then split new timestamps. Third-person = outside narrator. First-person = speak as the main character (I/me). Requires an AI chat channel.": "按场景改写成叙述而非逐行翻译，并重新划分时间轴。第三人称=旁白视角；第一人称=代入主角用“我”。需要 AI 对话翻译渠道。",
@@ -1234,5 +1231,11 @@
   "Initial prompt for the Whisper model for speech": "发音语言为 {} 时发送给whisper模型的提示词",
   "Hard subtitles need FFmpeg built with libass (subtitles filter). On macOS install ffmpeg-full: brew install ffmpeg-full, or switch subtitle type to Soft Subtitles.": "硬字幕需要带 libass 的 FFmpeg（subtitles 滤镜）。macOS 请安装：brew install ffmpeg-full，或改用软字幕。",
   "Narration: line-by-line (translate then rewrite)": "叙述：逐行（先直译再改写）",
-  "Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel.": "第三人称/第一人称：旁白改写场景并重排时间轴。逐行：与第三人称相同的场景字数预算与重排时间轴，但对每句对白先直译再润色改写（保持说话人语气，不做旁白视角）。需要 AI 对话翻译渠道。"
+  "Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel.": "第三人称/第一人称：旁白改写场景并重排时间轴。逐行：与第三人称相同的场景字数预算与重排时间轴，但对每句对白先直译再润色改写（保持说话人语气，不做旁白视角）。需要 AI 对话翻译渠道。",
+  "adaptive_hamed_speed_pct": "Hamed maximum additional speed-up (%)",
+  "adaptive_hamed_speed_pct_title": "Hamed maximum additional speed-up (%)",
+  "adaptive_hamed_speed_pct_notice": "Extra acceleration of generated audio, beyond the TTS speaking rate. Requires audio auto-rate. Other voices have no adaptive speed ceiling.",
+  "adaptive_namminh_speed_pct": "Nam Minh maximum additional speed-up (%)",
+  "adaptive_namminh_speed_pct_title": "Nam Minh maximum additional speed-up (%)",
+  "adaptive_namminh_speed_pct_notice": "Extra acceleration of generated audio, beyond the TTS speaking rate. Requires audio auto-rate. Other voices have no adaptive speed ceiling."
 }

@@ -692,6 +692,31 @@ def run_adaptive_dubbing_rewrite(
     return output
 
 
+def _audio_slots(durations, available, speed_limits):
+    """Allocate integer slots without exceeding any individual voice ceiling."""
+    import math
+    if isinstance(speed_limits, (int, float)):
+        speed_limits = [speed_limits] * len(durations)
+    if sum(durations) <= available:
+        return list(durations)
+    slots = [max(1, math.ceil(d / limit - 1e-9))
+             for d, limit in zip(durations, speed_limits)]
+    remaining = available - sum(slots)
+    if remaining < 0:
+        return None
+    total = sum(durations)
+    extra = remaining
+    for i, duration in enumerate(durations):
+        share = min(duration - slots[i], extra * duration // total)
+        slots[i] += share
+        remaining -= share
+    for i, duration in enumerate(durations):
+        share = min(duration - slots[i], remaining)
+        slots[i] += share
+        remaining -= share
+    return slots
+
+
 def fit_adaptive_dubbing_from_audio(
         *,
         queue_tts: Sequence[dict],
@@ -705,7 +730,7 @@ def fit_adaptive_dubbing_from_audio(
 
     Returns (new subtitles, needs_tts_again).
     """
-    from videotrans.util.help_ffmpeg import get_audio_time
+    from videotrans.task._adaptive_audio import measured_audio_ms, adaptive_speed_limit
 
     path = Path(adaptive_metadata_path(cache_folder))
     if not path.exists():
@@ -714,22 +739,17 @@ def fit_adaptive_dubbing_from_audio(
     queue_by_line = {int(row["line"]): row for row in queue_tts}
     durations: Dict[Tuple[int, int], int] = {}
     overflow: List[Tuple[int, int, int]] = []
-    soft_speed_pct = max(0.0, float(settings.get("adaptive_soft_speed_pct", 5))) if allow_soft_speed else 0.0
-    # Allow 1% for codec/container duration rounding. Additional tolerance is
-    # safe only when the normal audio-speed alignment stage is enabled.
-    tolerance = 1.01 + soft_speed_pct / 100.0
-
     for scene_index, scene in enumerate(meta["scenes"]):
         total = 0
+        limits = []
+        actual = []
         for record_index, record in enumerate(scene["records"]):
             q = queue_by_line.get(int(record.get("line", -1)))
-            duration = 0
-            if q and Path(q.get("filename", "")).exists():
-                duration = int(get_audio_time(q["filename"]))
-            if duration <= 0:
-                duration = _estimated_durations(
-                    [record], meta["target_lang"], float(meta["sec_per_unit"])
-                )[0]
+            if not q or not Path(q.get("filename", "")).is_file():
+                raise RuntimeError(f'Missing TTS audio for subtitle {record.get("line")}')
+            duration = measured_audio_ms(q["filename"])
+            limits.append(adaptive_speed_limit(allow_soft_speed, q.get('role', '')))
+            actual.append(duration)
             durations[(scene_index, record_index)] = duration
             total += duration
         fit_start, fit_end = _scene_fit_bounds(meta, scene_index)
@@ -741,15 +761,15 @@ def fit_adaptive_dubbing_from_audio(
             "required_speed_pct": round(required_speed_pct, 2),
             "status": "fits",
         }
-        if total > int(available * tolerance):
+        slots = _audio_slots(actual, available, limits)
+        if slots is None:
             scene["fit"]["status"] = "overflow"
             overflow.append((scene_index, total, available))
-        elif total > available and soft_speed_pct > 0:
-            scene["fit"]["status"] = "soft_speed"
-            logger.debug(
-                f"Adaptive scene {scene_index + 1} uses {required_speed_pct:.2f}% final speed-up "
-                f"within configured {soft_speed_pct:.2f}%"
-            )
+        else:
+            for i, slot in enumerate(slots):
+                durations[(scene_index, i)] = slot
+            if total > available:
+                scene["fit"]["status"] = "soft_speed"
 
     if overflow and allow_rewrite:
         model = _make_model(translate_type, uuid)
@@ -808,8 +828,8 @@ def fit_adaptive_dubbing_from_audio(
         raise RuntimeError(
             "Adaptive dubbing could not fit the following scenes after all rewrite attempts: "
             f"{details}. Lower the safety percentage, allow more rewrite attempts, or choose a faster voice. "
-            "To allow audio speed-up, enable audio auto-rate and set the adaptive soft speed "
-            "percentage at least as high as the required speed-up."
+            "Enable audio auto-rate to allow speed-up. Hamed and NamMinh have separate "
+            "adaptive acceleration limits; other voices have no configured ceiling."
         )
     output = _rebuild_output(meta, durations)
     for scene in meta["scenes"]:

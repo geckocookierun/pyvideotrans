@@ -234,7 +234,7 @@ def test_real_tts_measurement_retimes_inside_scene(tmp_path, monkeypatch):
     files = [tmp_path / "1.wav", tmp_path / "2.wav"]
     for path in files:
         path.touch()
-    monkeypatch.setattr("videotrans.util.help_ffmpeg.get_audio_time", lambda _: 1200)
+    monkeypatch.setattr("videotrans.task._adaptive_audio.measured_audio_ms", lambda _: 1200)
     output, needs_tts = fit_adaptive_dubbing_from_audio(
         queue_tts=[
             {"line": 1, "filename": str(files[0])},
@@ -254,7 +254,7 @@ def test_unresolved_real_tts_overflow_is_not_silently_truncated(tmp_path, monkey
     files = [tmp_path / "1.wav", tmp_path / "2.wav"]
     for path in files:
         path.touch()
-    monkeypatch.setattr("videotrans.util.help_ffmpeg.get_audio_time", lambda _: 900)
+    monkeypatch.setattr("videotrans.task._adaptive_audio.measured_audio_ms", lambda _: 900)
     with pytest.raises(RuntimeError, match="could not fit"):
         fit_adaptive_dubbing_from_audio(
             queue_tts=[
@@ -272,7 +272,7 @@ def test_allowed_soft_speed_is_used_before_requesting_rewrite(tmp_path, monkeypa
     files = [tmp_path / "1.wav", tmp_path / "2.wav"]
     for path in files:
         path.touch()
-    monkeypatch.setattr("videotrans.util.help_ffmpeg.get_audio_time", lambda _: 525)
+    monkeypatch.setattr("videotrans.task._adaptive_audio.measured_audio_ms", lambda _: 525)
     output, needs_tts = fit_adaptive_dubbing_from_audio(
         queue_tts=[
             {"line": 1, "filename": str(files[0])},
@@ -317,7 +317,7 @@ def test_neighbor_silence_fits_real_reported_6990ms_scene(tmp_path, monkeypatch)
     (tmp_path / META_FILENAME).write_text(json.dumps(meta), encoding="utf-8")
     audio = tmp_path / "scene.wav"
     audio.touch()
-    monkeypatch.setattr("videotrans.util.help_ffmpeg.get_audio_time", lambda _: 6990)
+    monkeypatch.setattr("videotrans.task._adaptive_audio.measured_audio_ms", lambda _: 6990)
 
     output, needs_tts = fit_adaptive_dubbing_from_audio(
         queue_tts=[{"line": 1, "filename": str(audio)}],
@@ -403,7 +403,7 @@ def test_repeated_over_budget_tts_tightens_cap_and_supplies_feedback(tmp_path, m
     path.write_text(json.dumps(meta))
     audio = tmp_path / 'scene.wav'
     audio.touch()
-    monkeypatch.setattr('videotrans.util.help_ffmpeg.get_audio_time', lambda _: 4585)
+    monkeypatch.setattr('videotrans.task._adaptive_audio.measured_audio_ms', lambda _: 4585)
 
     class Model:
         prompt = ''
@@ -418,7 +418,7 @@ def test_repeated_over_budget_tts_tightens_cap_and_supplies_feedback(tmp_path, m
 
     monkeypatch.setattr('videotrans.translator._adaptive_dubbing._make_model', lambda *_: Model())
     output, retry = fit_adaptive_dubbing_from_audio(
-        queue_tts=[{'line': line, 'filename': str(audio)} for line in (1, 2)],
+        queue_tts=[{'line': line, 'filename': str(audio), 'role': 'vi-VN-NamMinhNeural'} for line in (1, 2)],
         cache_folder=str(tmp_path), translate_type=10,
     )
     assert retry is True
@@ -430,10 +430,10 @@ def test_exhausted_rewrites_persist_actual_measurements(tmp_path, monkeypatch):
     _write_fit_meta(tmp_path, end_ms=8269)
     audio = tmp_path / 'scene.wav'
     audio.touch()
-    monkeypatch.setattr('videotrans.util.help_ffmpeg.get_audio_time', lambda _: 4585)
+    monkeypatch.setattr('videotrans.task._adaptive_audio.measured_audio_ms', lambda _: 4585)
     with pytest.raises(RuntimeError, match=r'needs 10\.9% speed-up'):
         fit_adaptive_dubbing_from_audio(
-            queue_tts=[{'line': line, 'filename': str(audio)} for line in (1, 2)],
+            queue_tts=[{'line': line, 'filename': str(audio), 'role': 'vi-VN-NamMinhNeural'} for line in (1, 2)],
             cache_folder=str(tmp_path), translate_type=10, allow_rewrite=False,
         )
     fit = json.loads((tmp_path / META_FILENAME).read_text())['scenes'][0]['fit']
@@ -670,3 +670,47 @@ def test_bounded_context_produces_the_same_first_pass_prompt():
     assert adaptive_rewrite_prompt(global_context=full_context, **kwargs) == adaptive_rewrite_prompt(
         global_context=_build_scene_context(source, 40, 41), **kwargs,
     )
+
+
+def test_missing_audio_cannot_be_accepted_using_word_estimates(tmp_path):
+    _write_fit_meta(tmp_path)
+    with pytest.raises(RuntimeError, match='Missing TTS audio'):
+        fit_adaptive_dubbing_from_audio(queue_tts=[], cache_folder=str(tmp_path), translate_type=10,
+                                        allow_rewrite=False)
+
+
+@pytest.mark.parametrize('allow_speed,duration', [(False, 501), (True, 526)])
+def test_no_hidden_one_percent_speed_allowance(tmp_path, monkeypatch, allow_speed, duration):
+    from videotrans.configure.config import settings
+    monkeypatch.setattr(settings, 'adaptive_namminh_speed_pct', 5)
+    _write_fit_meta(tmp_path, end_ms=1000)
+    audio = tmp_path / 'audio.wav'
+    audio.touch()
+    monkeypatch.setattr('videotrans.task._adaptive_audio.measured_audio_ms', lambda _: duration)
+    with pytest.raises(RuntimeError, match='could not fit'):
+        fit_adaptive_dubbing_from_audio(
+            queue_tts=[{'line': line, 'filename': str(audio), 'role': 'vi-VN-NamMinhNeural'} for line in (1, 2)],
+            cache_folder=str(tmp_path), translate_type=10, allow_rewrite=False,
+            allow_soft_speed=allow_speed,
+        )
+
+
+def test_mixed_voice_fit_preserves_each_voice_ceiling(tmp_path, monkeypatch):
+    from videotrans.configure.config import settings
+    monkeypatch.setattr(settings, 'adaptive_hamed_speed_pct', 20)
+    _write_fit_meta(tmp_path, end_ms=2000)
+    files = [tmp_path / 'hamed.wav', tmp_path / 'other.wav']
+    for path in files:
+        path.touch()
+    monkeypatch.setattr('videotrans.task._adaptive_audio.measured_audio_ms',
+                        lambda filename: 1200 if filename == str(files[0]) else 3000)
+    result, retry = fit_adaptive_dubbing_from_audio(
+        queue_tts=[dict(line=1, filename=str(files[0]), role='Hamed(Male/SA)'),
+                   dict(line=2, filename=str(files[1]), role='en-US-GuyNeural')],
+        cache_folder=str(tmp_path), translate_type=10,
+        allow_rewrite=False, allow_soft_speed=True,
+    )
+    assert not retry
+    assert result[-1]['end_time'] == 2000
+    assert 1200 / (result[0]['end_time'] - result[0]['start_time']) <= 1.2
+    assert 3000 / (result[1]['end_time'] - result[1]['start_time']) > 1.2

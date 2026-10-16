@@ -64,7 +64,7 @@ notices = {
                 'zh_hant_s', 'del_end_punc', 'asr_wait'],
     'trans': ['trans_thread', 'aitrans_thread', 'translation_wait', 'aitrans_temperature', 'aitrans_context',
               'adaptive_scene_gap_ms', 'adaptive_scene_max_s', 'adaptive_safety_pct',
-              'adaptive_soft_speed_pct', 'adaptive_rewrite_retries'],
+              'adaptive_hamed_speed_pct', 'adaptive_namminh_speed_pct', 'adaptive_rewrite_retries'],
     'dubbing': ['dubbing_thread', 'dubbing_wait', 'remove_dubb_silence', 'remove_dubb_all_silence',
                 'remove_dubb_silence_level', 'save_segment_audio', 'normal_text', 'edgetts_max_concurrent_tasks',
                 'edgetts_retry_nums', 'chattts_voice'],

@@ -308,7 +308,6 @@
   "adaptive_scene_gap_ms": "Adaptive scene break gap (ms)",
   "adaptive_scene_max_s": "Adaptive maximum scene length (s)",
   "adaptive_safety_pct": "Adaptive first-pass time budget (%)",
-  "adaptive_soft_speed_pct": "Adaptive allowed final speed-up (%)",
   "adaptive_rewrite_retries": "Adaptive TTS rewrite attempts",
   "adaptive_scene_gap_ms_title": "Adaptive scene break gap (ms)",
   "adaptive_scene_gap_ms_notice": "Start a new scene when the gap between source subtitle cues reaches this duration.",
@@ -316,8 +315,6 @@
   "adaptive_scene_max_s_notice": "Maximum source scene duration sent to the adaptive translation and rewrite pass.",
   "adaptive_safety_pct_title": "Adaptive first-pass time budget (%)",
   "adaptive_safety_pct_notice": "Ask the rewrite to use this percentage of the available scene time, leaving room for real TTS variation.",
-  "adaptive_soft_speed_pct_title": "Adaptive allowed final speed-up (%)",
-  "adaptive_soft_speed_pct_notice": "Maximum small speed-up allowed after measuring the real generated voice, when automatic voice acceleration is enabled.",
   "adaptive_rewrite_retries_title": "Adaptive TTS rewrite attempts",
   "adaptive_rewrite_retries_notice": "Number of times an overflowing scene may be shortened and synthesized again after measuring real TTS audio.",
   "Rewrite scenes as narration instead of line-by-line translation, then split new timestamps. Third-person = outside narrator. First-person = speak as the main character (I/me). Requires an AI chat channel.": "Rewrite scenes as narration instead of line-by-line translation, then split new timestamps. Third-person = outside narrator. First-person = speak as the main character (I/me). Requires an AI chat channel.",
@@ -1231,5 +1228,11 @@
   "Initial prompt for the Whisper model for speech": "Initial prompt for the Whisper model for {} speech",
   "Hard subtitles need FFmpeg built with libass (subtitles filter). On macOS install ffmpeg-full: brew install ffmpeg-full, or switch subtitle type to Soft Subtitles.": "Hard subtitles need FFmpeg built with libass (subtitles filter). On macOS install ffmpeg-full: brew install ffmpeg-full, or switch subtitle type to Soft Subtitles.",
   "Narration: line-by-line (translate then rewrite)": "Narration: line-by-line (translate then rewrite)",
-  "Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel.": "Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel."
+  "Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel.": "Third/first-person: narrator rewrite of scenes + new timestamps. Line-by-line: same scene budget and retiming as third-person, but translate each spoken line then polish the wording (keep dialogue voice, not narrator POV). Requires an AI chat channel.",
+  "adaptive_hamed_speed_pct": "Hamed maximum additional speed-up (%)",
+  "adaptive_hamed_speed_pct_title": "Hamed maximum additional speed-up (%)",
+  "adaptive_hamed_speed_pct_notice": "Extra acceleration of generated audio, beyond the TTS speaking rate. Requires audio auto-rate. Other voices have no adaptive speed ceiling.",
+  "adaptive_namminh_speed_pct": "Nam Minh maximum additional speed-up (%)",
+  "adaptive_namminh_speed_pct_title": "Nam Minh maximum additional speed-up (%)",
+  "adaptive_namminh_speed_pct_notice": "Extra acceleration of generated audio, beyond the TTS speaking rate. Requires audio auto-rate. Other voices have no adaptive speed ceiling."
 }

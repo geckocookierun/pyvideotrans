@@ -26,22 +26,29 @@ class AlignMixin:
             is_novoice_mp4(self.cfg.novoice_mp4, self.uuid)
         if vail_file(self.cfg.novoice_mp4):
             self.video_time = get_video_duration(self.cfg.novoice_mp4)
-        from videotrans.task._rate import SpeedRate
+        if getattr(self.cfg, 'narration_mode', 'none') == 'adaptive':
+            from videotrans.task._adaptive_audio import render_adaptive_audio
+            self.queue_tts = render_adaptive_audio(
+                queue_tts=self.queue_tts, target_audio=self.cfg.target_wav,
+                cache_folder=self.cfg.cache_folder, video_duration_ms=self.video_time,
+                allow_speed=bool(self.cfg.voice_autorate),
+            )
+        else:
+            from videotrans.task._rate import SpeedRate
 
-        
-        rate_inst = SpeedRate(
-            queue_tts=self.queue_tts,
-            uuid=self.uuid,
-            should_audiorate=self.cfg.voice_autorate,
-            should_videorate=self.cfg.video_autorate if not self.is_audio_trans else False,
-            novoice_mp4=self.cfg.novoice_mp4 if not self.is_audio_trans else None,
-            raw_total_time=self.video_time,
-            target_audio=self.cfg.target_wav,
-            cache_folder=self.cfg.cache_folder,
-            align_sub_audio=self.cfg.align_sub_audio and not self.cfg.voice_autorate and not self.cfg.video_autorate,
-            remove_silent_mid=self.cfg.remove_silent_mid
-        )
-        self.queue_tts = rate_inst.run()
+            rate_inst = SpeedRate(
+                queue_tts=self.queue_tts,
+                uuid=self.uuid,
+                should_audiorate=self.cfg.voice_autorate,
+                should_videorate=self.cfg.video_autorate if not self.is_audio_trans else False,
+                novoice_mp4=self.cfg.novoice_mp4 if not self.is_audio_trans else None,
+                raw_total_time=self.video_time,
+                target_audio=self.cfg.target_wav,
+                cache_folder=self.cfg.cache_folder,
+                align_sub_audio=self.cfg.align_sub_audio and not self.cfg.voice_autorate and not self.cfg.video_autorate,
+                remove_silent_mid=self.cfg.remove_silent_mid
+            )
+            self.queue_tts = rate_inst.run()
         if vail_file(self.cfg.novoice_mp4):
             self.video_time = get_video_duration(self.cfg.novoice_mp4)
             # Align may rewrite novoice; re-seal clean cover base before assemble blurs it.
