@@ -19,11 +19,8 @@ class TranslateMixin:
         self.signal(text=tr('starttrans'))
 
         requested_mode = getattr(self.cfg, 'narration_mode', None)
-        adaptive_meta_ready = True
-        if requested_mode == 'adaptive':
-            from videotrans.translator._adaptive_dubbing import adaptive_metadata_complete
-            adaptive_meta_ready = adaptive_metadata_complete(getattr(self.cfg, 'cache_folder', '') or '')
-        if vail_file(self.cfg.target_sub) and adaptive_meta_ready:
+        # Adaptive mode validates source, voice and model against its checkpoint.
+        if requested_mode != 'adaptive' and vail_file(self.cfg.target_sub):
             self.signal(
                 text=Path(self.cfg.target_sub).read_text(encoding="utf-8", errors="ignore"),
                 type='replace_subtitle'
@@ -33,35 +30,35 @@ class TranslateMixin:
         rawsrt = get_subtitle_from_srt(self.cfg.source_sub, is_file=True)
         self.signal(text=tr('kaishitiquhefanyi'))
 
-        narration_mode = getattr(self.cfg, 'narration_mode', None)
+        narration_mode = requested_mode
         if narration_mode in ('line_third', 'line_first'):
             narration_mode = 'line'
         if narration_mode not in ('none', 'third', 'first', 'line', 'adaptive'):
             narration_mode = 'third' if getattr(self.cfg, 'third_person_narration', False) else 'none'
         # line = same scene pipeline as third-person (incl. retime), prompt forces 1:1 lines.
         use_scene_narration = narration_mode in ('third', 'first', 'line', 'adaptive')
-        one_to_one = narration_mode == 'line'
-        narration_style = getattr(self.cfg, 'narration_style', None)
-        if narration_style not in ('third', 'first'):
-            narration_style = 'first' if narration_mode == 'first' else 'third'
-        if one_to_one:
-            narration_style = 'third'
         if narration_mode == 'adaptive':
             from videotrans.translator._adaptive_dubbing import run_adaptive_dubbing_rewrite
             self.signal(text=tr('Adaptive dubbing rewriting...'))
             target_srt = run_adaptive_dubbing_rewrite(
-                text_list=copy.deepcopy(rawsrt),
+                text_list=rawsrt,
                 translate_type=self.cfg.translate_type,
                 source_code=self.cfg.source_language_code,
                 target_code=self.cfg.target_language_code,
                 voice_role=getattr(self.cfg, 'voice_role', '') or '',
                 voice_rate=getattr(self.cfg, 'voice_rate', '+0%') or '+0%',
                 cache_folder=getattr(self.cfg, 'cache_folder', '') or '',
+                target_sub=self.cfg.target_sub,
                 uuid=self.uuid,
             )
         elif use_scene_narration:
             from videotrans.translator._narration import run_third_person_narration
+            one_to_one = narration_mode == 'line'
+            narration_style = getattr(self.cfg, 'narration_style', None)
+            if narration_style not in ('third', 'first'):
+                narration_style = 'first' if narration_mode == 'first' else 'third'
             if one_to_one:
+                narration_style = 'third'
                 status = tr('Line-by-line rewrite...')
             elif narration_style == 'first':
                 status = tr('First-person narration rewriting...')

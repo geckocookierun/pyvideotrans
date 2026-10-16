@@ -66,7 +66,7 @@ def test_rewrite_scene_retries_only_malformed_response():
             self.calls += 1
             if self.calls == 1:
                 return "not JSON"
-            assert "previous answer was not valid JSON" in self.prompt
+            assert "previous answer was invalid" in self.prompt
             return '[{"source_ids":["S1"],"text":"صحيح"}]'
 
     model = FakeModel()
@@ -115,17 +115,14 @@ def test_rewrite_scene_requests_only_omitted_source_cues():
     assert [row["source_ids"] for row in records] == [["S1"], ["S2"]]
 
 
-def test_rewrite_scene_retries_when_model_exceeds_text_budget():
+def test_word_estimate_does_not_trigger_a_speculative_rewrite():
     class FakeModel:
         prompt = ""
         calls = 0
 
         def _item_task(self, _):
             self.calls += 1
-            if self.calls == 1:
-                return '[{"source_ids":["S1"],"text":"one two three four"}]'
-            assert "previous complete answer used 4 words" in self.prompt
-            return '[{"source_ids":["S1"],"text":"one two"}]'
+            return '[{"source_ids":["S1"],"text":"one two three four"}]'
 
     model = FakeModel()
     records = _rewrite_scene(
@@ -138,8 +135,8 @@ def test_rewrite_scene_retries_when_model_exceeds_text_budget():
         unit="words",
         window_s=1.0,
     )
-    assert model.calls == 2
-    assert records == [{"source_ids": ["S1"], "text": "one two"}]
+    assert model.calls == 1
+    assert records == [{"source_ids": ["S1"], "text": "one two three four"}]
 
 
 def test_source_order_keeps_rewritten_dialogue_near_picture_order():
@@ -443,3 +440,233 @@ def test_exhausted_rewrites_persist_actual_measurements(tmp_path, monkeypatch):
     assert fit['status'] == 'overflow'
     assert fit['actual_tts_ms'] == 9170
     assert fit['available_ms'] == 8269
+
+
+
+def _single_scene_kwargs(model, target_lang='Vietnamese'):
+    return dict(
+        model=model,
+        scene_sources=[{'id': 'S1', 'text': '你要老师替你道歉吗？', 'start_ms': 0, 'end_ms': 3000}],
+        global_context='A teacher speaks to a student.',
+        source_lang='Chinese', target_lang=target_lang,
+        max_units=20, unit='words', window_s=3,
+    )
+
+
+def test_valid_translation_needs_one_call_without_review():
+    class Model:
+        prompt = ''
+        calls = 0
+
+        def _item_task(self, _):
+            self.calls += 1
+            assert 'Translate the source dialogue from Chinese into Vietnamese' in self.prompt
+            assert 'A teacher speaks to a student.' in self.prompt
+            assert 'grammatical subject, action, and recipient' in self.prompt
+            # Source appears once: no repeated INPUT block or review request.
+            assert self.prompt.count('你要老师替你道歉吗？') == 1
+            return '[{"source_ids":["S1"],"text":"Em muốn thầy xin lỗi thay em sao?"}]'
+
+    model = Model()
+    records = _rewrite_scene(**_single_scene_kwargs(model))
+    assert model.calls == 1
+    assert records[0]['text'] == 'Em muốn thầy xin lỗi thay em sao?'
+
+
+def test_untranslated_han_retries_before_acceptance():
+    class Model:
+        prompt = ''
+        calls = 0
+
+        def _item_task(self, _):
+            self.calls += 1
+            if self.calls == 1:
+                return '[{"source_ids":["S1"],"text":"老师替你道歉？"}]'
+            assert 'Untranslated Han-script text remains' in self.prompt
+            return '[{"source_ids":["S1"],"text":"Em muốn thầy xin lỗi thay em sao?"}]'
+
+    model = Model()
+    records = _rewrite_scene(**_single_scene_kwargs(model))
+    assert model.calls == 2
+    assert records[0]['text'] == 'Em muốn thầy xin lỗi thay em sao?'
+
+
+def test_wrong_script_is_not_accepted_as_shortest_complete_result():
+    class Model:
+        prompt = ''
+
+        def _item_task(self, _):
+            return '[{"source_ids":["S1"],"text":"老师替你道歉？"}]'
+
+    with pytest.raises(RuntimeError, match='invalid output'):
+        _rewrite_scene(**_single_scene_kwargs(Model()))
+
+
+@pytest.mark.parametrize('language', ['Chinese', 'Traditional Chinese', 'Japanese', 'zh-cn', 'ja'])
+def test_han_remains_valid_for_han_script_targets(language):
+    class Model:
+        prompt = ''
+
+        def _item_task(self, _):
+            return '[{"source_ids":["S1"],"text":"先生"}]'
+
+    assert _rewrite_scene(**_single_scene_kwargs(Model(), language))[0]['text'] == '先生'
+
+
+def test_dialogue_context_excludes_distant_and_current_cues():
+    from videotrans.translator._adaptive_dubbing import _scene_dialogue_context
+    context = '\n'.join(f'S{i}: text {i}' for i in range(1, 41))
+    result = _scene_dialogue_context(context, [{'id': 'S20'}, {'id': 'S21'}])
+    assert 'S14: text 14' in result
+    assert 'S19: text 19' in result
+    assert 'S22: text 22' in result
+    assert 'S25: text 25' in result
+    assert 'S13:' not in result
+    assert 'S20:' not in result
+    assert 'S21:' not in result
+    assert 'S26:' not in result
+    assert result.index('PRECEDING DIALOGUE') < result.index('FOLLOWING DIALOGUE')
+
+
+@pytest.fixture
+def adaptive_pipeline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    class Model:
+        model_name = 'model-a'
+        prompt = ''
+        fail_on = None
+
+        def __init__(self):
+            self.calls = []
+
+        def _item_task(self, _):
+            required = self.prompt.split('Required source ids: ', 1)[1].split('.\n', 1)[0]
+            ids = [value.strip() for value in required.split(',')]
+            self.calls.append(ids)
+            if self.fail_on in ids:
+                raise RuntimeError('provider unavailable')
+            return json.dumps([{'source_ids': [sid], 'text': f'translated {sid}'} for sid in ids])
+
+    model = Model()
+    probes = []
+
+    def probe(**kwargs):
+        probes.append(kwargs)
+        return {'sec_per_unit': 0.3, 'unit': 'words', 'voice': kwargs['voice_role'], 'rate': kwargs['voice_rate']}
+
+    monkeypatch.setattr('videotrans.translator._adaptive_dubbing._make_model', lambda *_: model)
+    monkeypatch.setattr('videotrans.translator._adaptive_dubbing.get_source_target_code', lambda **_: ('Chinese', 'English'))
+    monkeypatch.setattr('videotrans.translator._adaptive_dubbing.probe_target_sec_per_unit', probe)
+    kwargs = dict(
+        text_list=[
+            {'text': '你好', 'start_time': 0, 'end_time': 2000},
+            {'text': '再见', 'start_time': 4000, 'end_time': 6000},
+        ],
+        translate_type=10, source_code='zh-cn', target_code='en',
+        voice_role='voice-a', voice_rate='+0%', cache_folder=str(tmp_path),
+    )
+    return SimpleNamespace(model=model, probes=probes, kwargs=kwargs, path=tmp_path / META_FILENAME)
+
+
+def test_complete_checkpoint_skips_llm_and_pace_probe_and_keeps_fitted_times(adaptive_pipeline):
+    p = adaptive_pipeline
+    run_adaptive_dubbing_rewrite(**p.kwargs)
+    meta = json.loads(p.path.read_text())
+    meta['scenes'][0]['records'][0].update(start_ms=123, end_ms=876)
+    p.path.write_text(json.dumps(meta))
+    output = run_adaptive_dubbing_rewrite(**p.kwargs)
+    assert len(p.model.calls) == 2
+    assert len(p.probes) == 1
+    assert (output[0]['start_time'], output[0]['end_time']) == (123, 876)
+
+
+@pytest.mark.parametrize('changed', ['source', 'voice', 'rate', 'model', 'version', 'safety'])
+def test_checkpoint_invalidates_for_translation_inputs(adaptive_pipeline, monkeypatch, changed):
+    from videotrans.configure.config import settings
+    p = adaptive_pipeline
+    run_adaptive_dubbing_rewrite(**p.kwargs)
+    if changed == 'source':
+        p.kwargs['text_list'][0]['text'] = '您好'
+    elif changed == 'voice':
+        p.kwargs['voice_role'] = 'voice-b'
+    elif changed == 'rate':
+        p.kwargs['voice_rate'] = '+20%'
+    elif changed == 'model':
+        p.model.model_name = 'model-b'
+    elif changed == 'version':
+        meta = json.loads(p.path.read_text())
+        meta['version'] -= 1
+        p.path.write_text(json.dumps(meta))
+    else:
+        monkeypatch.setattr(settings, 'adaptive_safety_pct', 70)
+    run_adaptive_dubbing_rewrite(**p.kwargs)
+    assert len(p.model.calls) == 4
+    assert len(p.probes) == 2
+
+
+def test_partial_checkpoint_retries_only_unfinished_scenes(adaptive_pipeline):
+    p = adaptive_pipeline
+    p.model.fail_on = 'S2'
+    with pytest.raises(RuntimeError, match='provider unavailable'):
+        run_adaptive_dubbing_rewrite(**p.kwargs)
+    assert json.loads(p.path.read_text())['complete'] is False
+    p.model.fail_on = None
+    run_adaptive_dubbing_rewrite(**p.kwargs)
+    assert p.model.calls == [['S1'], ['S2'], ['S2']]
+    assert json.loads(p.path.read_text())['complete'] is True
+
+
+def test_matching_cache_preserves_user_edited_target(adaptive_pipeline, tmp_path):
+    p = adaptive_pipeline
+    run_adaptive_dubbing_rewrite(**p.kwargs)
+    target = tmp_path / 'target.srt'
+    target.write_text('1\n00:00:00,123 --> 00:00:00,876\nUser edited translation\n')
+    output = run_adaptive_dubbing_rewrite(target_sub=str(target), **p.kwargs)
+    assert output[0]['text'] == 'User edited translation'
+    assert len(p.model.calls) == 2
+    assert len(p.probes) == 1
+
+
+@pytest.mark.parametrize('broken', ['{broken', 'null', '[]', '{"scenes": null}'])
+def test_invalid_checkpoint_is_rebuilt(adaptive_pipeline, broken):
+    p = adaptive_pipeline
+    p.path.write_text(broken)
+    output = run_adaptive_dubbing_rewrite(**p.kwargs)
+    assert len(output) == 2
+    assert json.loads(p.path.read_text())['complete'] is True
+
+
+def test_scene_plans_store_only_bounded_context():
+    source = [{'text': f'cue {i}', 'start_time': i * 1000, 'end_time': i * 1000 + 500} for i in range(1000)]
+    times = [(row['start_time'], row['end_time']) for row in source]
+    plans = _build_scene_plans(source, times=times, spans=[(500, 501)], sec_per_unit=0.3, safety=0.85)
+    context = plans[0]['global_context']
+    assert len(context.splitlines()) == 12
+    assert 'S495: cue 494' in context
+    assert 'S506: cue 505' in context
+    assert 'S1:' not in context
+
+
+@pytest.mark.parametrize('row', [
+    {'source_ids': 42, 'text': 'invalid'},
+    {'source_ids': {'S1': True}, 'text': 'invalid'},
+    {'source_ids': ['S1'], 'text': {'translation': 'invalid'}},
+    {'source_ids': ['S1'], 'text': 123},
+])
+def test_invalid_record_types_are_rejected_for_retry(row):
+    with pytest.raises(ValueError, match='no valid dialogue records'):
+        parse_adaptive_records(json.dumps([row]), ['S1'])
+
+
+def test_bounded_context_produces_the_same_first_pass_prompt():
+    from videotrans.translator._adaptive_dubbing import _build_scene_context, adaptive_rewrite_prompt
+    source = [{'text': f'line {i}'} for i in range(100)]
+    full_context = '\n'.join(f'S{i+1}: {row["text"]}' for i, row in enumerate(source))
+    kwargs = dict(
+        scene_sources=[{'id': f'S{i+1}', 'text': source[i]['text']} for i in (40, 41)],
+        source_lang='English', target_lang='Vietnamese', max_units=20, unit='words', window_s=5,
+    )
+    assert adaptive_rewrite_prompt(global_context=full_context, **kwargs) == adaptive_rewrite_prompt(
+        global_context=_build_scene_context(source, 40, 41), **kwargs,
+    )

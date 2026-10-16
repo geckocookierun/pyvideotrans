@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Duration-aware dialogue adaptation for video dubbing.
 
-The source transcript is used as global context, but rewriting happens inside
-bounded scenes.  Every generated line keeps references to source cue ids so the
-new dialogue can move inside a scene without drifting away from the picture.
+Translation uses neighboring dialogue as context and stays inside bounded scenes.
+Every generated line keeps source cue references so dialogue can move inside a
+scene without drifting away from the picture.
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from videotrans.translator._constants import AI_TRANS_CHANNELS
 from videotrans.translator._lang_utils import get_source_target_code
 from videotrans.translator._narration import (
     _make_srt_item,
-    _narration_limits,
     count_lines_units,
     count_speaking_units,
     probe_target_sec_per_unit,
@@ -26,9 +25,11 @@ from videotrans.translator._narration import (
 
 
 META_FILENAME = "adaptive_dubbing.json"
-ALGORITHM_VERSION = 4
+ALGORITHM_VERSION = 7
 SCENE_SILENCE_PAD_CAP_MS = 750
 MAX_SCENE_REQUESTS = 4
+CONTEXT_BEFORE_CUES = 6
+CONTEXT_AFTER_CUES = 4
 _JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
 
 
@@ -36,15 +37,22 @@ def adaptive_metadata_path(cache_folder: str) -> str:
     return str(Path(cache_folder) / META_FILENAME)
 
 
-def adaptive_metadata_complete(cache_folder: str) -> bool:
-    path = Path(adaptive_metadata_path(cache_folder))
-    if not path.exists():
-        return False
+def _load_metadata(path: Path) -> dict:
     try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-        return bool(meta.get("complete")) and meta.get("version") == ALGORITHM_VERSION
-    except (OSError, ValueError, TypeError):
-        return False
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict) and isinstance(value.get("scenes", []), list):
+            return value
+        return {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_metadata(path: Path, meta: dict) -> None:
+    """Replace a checkpoint only after the full JSON has been written."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def build_adaptive_scene_spans(
@@ -79,25 +87,30 @@ def _source_text(item) -> str:
     return (value or "").strip()
 
 
-def _build_global_context(text_list: Sequence, lo: int, hi: int, limit: int = 30000) -> str:
-    """Use the whole transcript when it fits; otherwise keep a wide local window."""
-    rows = [f"{_cue_id(i)}: {_source_text(item)}" for i, item in enumerate(text_list) if _source_text(item)]
-    full = "\n".join(rows)
-    if len(full) <= limit:
-        return full
-
-    # Long videos can exceed a model context window. Keep the opening context
-    # (names/setting) plus a large neighborhood around the current scene.
-    local_lo = max(0, lo - 60)
-    local_hi = min(len(text_list) - 1, hi + 60)
-    opening = "\n".join(rows[:25])
-    local = "\n".join(
+def _build_scene_context(text_list: Sequence, lo: int, hi: int) -> str:
+    """Store only the local window, including cues needed by partial retries."""
+    return "\n".join(
         f"{_cue_id(i)}: {_source_text(text_list[i])}"
-        for i in range(local_lo, local_hi + 1)
+        for i in range(max(0, lo - CONTEXT_BEFORE_CUES), min(len(text_list), hi + CONTEXT_AFTER_CUES + 1))
         if _source_text(text_list[i])
     )
-    prefix = f"{opening}\n...\n"
-    return prefix + local[:max(0, limit - len(prefix))]
+
+
+def _scene_dialogue_context(global_context: str, scene_sources: Sequence[dict]) -> str:
+    """Keep adjacent turns, without repeating the requested cues as context."""
+    rows = global_context.splitlines()
+    numbered = []
+    for row in rows:
+        match = re.match(r'^S(\d+):', row)
+        if match:
+            numbered.append((int(match.group(1)), row))
+    indices = [int(row['id'][1:]) for row in scene_sources if re.fullmatch(r'S\d+', row['id'])]
+    if not numbered or not indices:
+        return global_context
+    lo, hi = min(indices), max(indices)
+    before = [row for index, row in numbered if lo - CONTEXT_BEFORE_CUES <= index < lo]
+    after = [row for index, row in numbered if hi < index <= hi + CONTEXT_AFTER_CUES]
+    return 'PRECEDING DIALOGUE:\n' + '\n'.join(before) + '\nFOLLOWING DIALOGUE:\n' + '\n'.join(after)
 
 
 def adaptive_rewrite_prompt(
@@ -111,67 +124,45 @@ def adaptive_rewrite_prompt(
         window_s: float,
         missing_ids: Sequence[str] = (),
         format_error: str = "",
-        budget_error: str = "",
         tts_feedback: str = "",
 ) -> str:
-    line_unit_cap = int(_narration_limits(target_lang).get("unit_cap", 8))
-    source_rows = "\n".join(
-        f"{row['id']} [{row['start_ms']}..{row['end_ms']} ms]: {row['text']}"
-        for row in scene_sources
-    )
+    source_rows = "\n".join(f"{row['id']}: {row['text']}" for row in scene_sources)
     required = ", ".join(row["id"] for row in scene_sources)
-    missing_note = ""
+    feedback = []
     if missing_ids:
-        missing_note = (
-            "\nYour previous answer failed to cover these source ids: "
-            f"{', '.join(missing_ids)}. Return a corrected complete answer.\n"
-        )
-    format_note = ""
+        feedback.append("Return the omitted source ids: " + ", ".join(missing_ids) + ".")
     if format_error:
-        format_note = (
-            "\nYour previous answer was not valid JSON. Return the complete scene again. "
-            "Check every comma, quote, bracket and brace carefully.\n"
-        )
-    budget_note = ""
-    if budget_error:
-        budget_note = (
-            f"\n{budget_error} Return the complete scene again with no more than "
-            f"{max_units} {unit}. Shorten wording, not meaning.\n"
-        )
+        feedback.append("The previous answer was invalid: " + format_error + ". Return corrected JSON.")
+    if tts_feedback:
+        feedback.append(tts_feedback)
     return (
-        "Adapt subtitles into a compact dubbing script. This is translation plus rewriting, "
-        "not line-by-line subtitle translation.\n"
-        f"Translate from {source_lang or 'auto'} into {target_lang}. Output {target_lang} only.\n"
-        "You MAY merge, split, reorder wording inside this scene, and change the number of lines. "
-        "Keep the event order, character intent, names, relationships, numbers, questions, replies, "
-        "decisions and emotional stance. Do not add events.\n"
-        "Write natural spoken dialogue for dubbing. Keep character point of view and pronouns; "
-        "do not turn dialogue into narrator prose.\n"
-        "Resolve speaker, addressee, and who does what to whom from the surrounding transcript "
-        "before translating. A subtitle cue can contain multiple speakers; cue boundaries are "
-        "not speaker boundaries. Kinship terms and titles may be self-reference, direct address, "
-        "or third-person reference: determine their role from grammar and context, not a fixed mapping. "
-        "Keep separate turns distinct, including a short reply at the end of a cue. "
-        "When shortening, preserve the agent, recipient, relationships, negation, and question intent. "
-        "Before returning, compare each translated action and pronoun against the source; "
-        "correct any reversed roles or accidental self-directed actions. Do not invent identities "
-        "when context is insufficient.\n"
-        f"The scene lasts {window_s:.2f} seconds. The complete output must be at most "
-        f"{max_units} {unit}. Use fewer words when possible without losing essential meaning.\n"
-        f"Each output line must be a complete short spoken phrase of about at most "
-        f"{line_unit_cap} {unit}; split at a natural breath boundary if needed.\n"
-        "Every source id must occur in source_ids exactly where its meaning is represented. "
-        "Several source ids may map to one rewritten line; one source id may map to several lines.\n"
+        f"Translate the source dialogue from {source_lang or 'auto'} into {target_lang} for dubbing. "
+        f"Every output text must be in {target_lang}, including transliterated names. "
+        "Meaning and speaker roles take priority over brevity. Translate faithfully; "
+        "shorten only as needed for the time budget.\n"
+        "Read neighboring dialogue to resolve references. Each source cue can contain multiple speakers. "
+        "Keep utterances in their original order, with a single speaking turn per output record. "
+        "Never combine different speakers in one record. Preserve the grammatical subject, action, "
+        "and recipient of every clause. "
+        "A kinship/title noun can refer to the speaker, listener, or someone else: resolve it from the "
+        "source grammar and context. Never carry pronouns across a change of speaker or replace an "
+        "explicit subject with a different person. Preserve questions, replies, negation, names and "
+        "relationships; do not invent a relationship to choose a pronoun.\n"
+        f"Time budget: {window_s:.2f}s; at most {max_units} {unit} total. "
+        "Split at natural phrase or speaker boundaries; do not omit meaning to make lines short. "
+        "Reconstruct clauses across cue breaks before translating; do not translate broken words "
+        "in isolation. Keep proper names consistent with the source.\n"
+        "Do not drop a statement or reply to meet the word budget. The budget is a shortening "
+        "target, never permission to omit source meaning.\n"
+        + '\n'.join(feedback) + '\n'
+        "Context only (do not translate outside the requested source cues):\n"
+        + _scene_dialogue_context(global_context, scene_sources) + '\n'
         f"Required source ids: {required}.\n"
-        f"{missing_note}{format_note}{budget_note}\n{tts_feedback}\n"
-        "GLOBAL TRANSCRIPT CONTEXT (reference only; rewrite only the current scene):\n"
-        f"{global_context}\n\n"
-        "CURRENT SCENE:\n"
-        f"{source_rows}\n\n"
-        "Return only a valid JSON array inside <TRANSLATE_TEXT> tags. No markdown. "
-        "Put a comma between every object and escape any double quote inside dialogue text. Schema:\n"
-        '[{"source_ids":["S1","S2"],"text":"rewritten target-language dialogue"}]\n'
-        "\n<INPUT>\n{batch_input}\n</INPUT>"
+        "Cover every source id where its meaning is translated. Return only a JSON array with "
+        "source_ids and text, where several source ids may share a line and one source id may have "
+        "several lines. No explanation, no speaker labels.\n"
+        '[{"source_ids":["S1","S2"],"text":"translated dialogue"}]\n'
+        f"TRANSLATE THESE CUES INTO {target_lang}:\n{source_rows}\n"
     )
 
 
@@ -212,10 +203,15 @@ def parse_adaptive_records(raw: str, valid_ids: Sequence[str]) -> List[dict]:
     for row in data:
         if not isinstance(row, dict):
             continue
-        content = str(row.get("text") or "").strip()
+        content = row.get("text")
+        if not isinstance(content, str):
+            continue
+        content = content.strip()
         ids = row.get("source_ids") or []
         if isinstance(ids, str):
             ids = re.findall(r"S\d+", ids, flags=re.I)
+        if not isinstance(ids, list):
+            continue
         ids = [str(x).upper() for x in ids if str(x).upper() in valid]
         ids = list(dict.fromkeys(ids))
         if content and ids:
@@ -390,7 +386,7 @@ def _build_scene_plans(
             "start_ms": int(times[lo][0]),
             "end_ms": int(times[hi][1]),
             "source": sources,
-            "global_context": _build_global_context(text_list, lo, hi),
+            "global_context": _build_scene_context(text_list, lo, hi),
             "records": [],
         })
 
@@ -439,9 +435,6 @@ def _rewrite_scene(
     pending = list(scene_sources)
     collected: List[dict] = []
     format_error = ""
-    budget_error = ""
-    best_complete: List[dict] = []
-    best_units = 10**9
     for attempt in range(MAX_SCENE_REQUESTS):
         pending_ids = [row["id"] for row in pending]
         joined = "\n".join(f"{row['id']}: {row['text']}" for row in pending)
@@ -466,62 +459,48 @@ def _rewrite_scene(
             window_s=request_window_s,
             missing_ids=pending_ids if collected else (),
             format_error=format_error,
-            budget_error=budget_error,
             tts_feedback=tts_feedback,
         )
         raw = model._item_task(joined)
         try:
             records = parse_adaptive_records(raw or "", pending_ids)
-        except (ValueError, json.JSONDecodeError) as exc:
+            if _unexpected_han(records, target_lang):
+                raise ValueError(f"Untranslated Han-script text remains; output {target_lang} only")
+        except ValueError as exc:
             format_error = str(exc)
             if attempt + 1 < MAX_SCENE_REQUESTS:
-                logger.warning(f"Adaptive rewrite returned malformed JSON; retrying scene: {exc}")
+                logger.warning(f"Adaptive rewrite returned invalid output; retrying scene: {exc}")
                 continue
             raise RuntimeError(
-                "Adaptive dubbing rewrite returned invalid JSON after retrying the scene"
+                "Adaptive dubbing rewrite returned invalid output after retrying the scene"
             ) from exc
         format_error = ""
-        budget_error = ""
         collected.extend(records)
         missing = missing_source_ids(collected, required)
         if not missing:
-            candidate = sorted(collected, key=_source_order)
-            actual_units = count_lines_units([row["text"] for row in candidate], target_lang)
-            if actual_units < best_units:
-                best_complete = candidate
-                best_units = actual_units
-            if actual_units <= max_units:
-                # Stable sort protects picture sync if a model returns valid ids out of order.
-                return candidate
-            budget_error = (
-                f"Your previous complete answer used {actual_units} {unit}, exceeding the limit."
-            )
-            logger.warning(
-                f"Adaptive rewrite exceeded budget {actual_units}>{max_units} {unit}; "
-                "retrying complete scene"
-            )
-            # A too-long complete answer must be rewritten as a whole; appending
-            # fragments cannot reduce it.
-            pending = list(scene_sources)
-            collected = []
-            continue
+            # Word count is an estimate. Only measured TTS overflow warrants
+            # shortening complete dialogue; avoid speculative LLM rewrites.
+            return sorted(collected, key=_source_order)
         # Preserve accepted dialogue and ask only for the omitted cues. This is
         # both cheaper and more reliable than rewriting the complete scene.
         pending = [source_by_id[source_id] for source_id in missing]
         logger.warning(f"Adaptive rewrite missing source ids {missing}; requesting only missing cues")
     missing = missing_source_ids(collected, required)
-    if best_complete:
-        # Real synthesized duration remains authoritative. Returning the
-        # shortest complete candidate lets the TTS feedback loop make the
-        # final decision when a provider repeatedly ignores the word limit.
-        logger.warning(
-            f"Adaptive rewrite still exceeded text budget after {MAX_SCENE_REQUESTS} requests; "
-            f"using shortest complete result ({best_units}/{max_units} {unit})"
-        )
-        return best_complete
-    if missing:
-        raise RuntimeError(f"Adaptive dubbing rewrite omitted source cues: {', '.join(missing)}")
-    return sorted(collected, key=_source_order)
+    raise RuntimeError(f"Adaptive dubbing rewrite omitted source cues: {', '.join(missing)}")
+
+
+def _unexpected_han(records: Sequence[dict], target_lang: str) -> bool:
+    """Reject untranslated Han text for targets that do not use Han script.
+
+    This is a script guard, not a general language or semantic classifier.
+    """
+    language = target_lang.strip().lower()
+    if re.search(r'chinese|japanese|korean|cantonese|mandarin', language) or re.match(
+        r'^(zh|ja|ko|yue)(?:[-_]|$)', language
+    ):
+        return False
+    return any(re.search(r'[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0002fa1f]', row['text'])
+               for row in records)
 
 
 def _rewrite_signature(
@@ -535,9 +514,11 @@ def _rewrite_signature(
         gap_ms: int,
         max_scene_ms: int,
         safety: float,
+        model_config: dict,
 ) -> str:
     payload = {
         "algorithm_version": ALGORITHM_VERSION,
+        "model": model_config,
         "scene_silence_pad_cap_ms": SCENE_SILENCE_PAD_CAP_MS,
         "source": [
             [_source_text(row), int(row["start_time"]), int(row["end_time"])]
@@ -578,14 +559,40 @@ def _rebuild_output(meta: dict, duration_map: Dict[Tuple[int, int], int] | None 
             scene_end_ms=fit_end,
             durations_ms=estimates,
         )
-        for record_index, (row, (a, b)) in enumerate(zip(records, spans)):
+        for row, (a, b) in zip(records, spans):
             item = _make_srt_item(line_no, a, b, row["text"])
             output.append(item)
             row["line"] = line_no
             row["start_ms"] = a
             row["end_ms"] = b
-            row["record_index"] = record_index
             line_no += 1
+    return output
+
+
+def _set_scene_records(scene: dict, records: List[dict]) -> None:
+    by_id = {row["id"]: row for row in scene["source"]}
+    for record in records:
+        record["anchor_ms"] = _anchor_for_ids(record["source_ids"], by_id)
+    scene["records"] = records
+
+
+def _cached_output(meta: dict, target_sub: str) -> List[dict] | None:
+    """Restore saved timing; preserve an existing, user-editable target SRT."""
+    if not meta.get("complete"):
+        return None
+    try:
+        records = [row for scene in meta["scenes"] for row in scene["records"]]
+        output = [_make_srt_item(i, row["start_ms"], row["end_ms"], row["text"])
+                  for i, row in enumerate(records, 1)]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not output:
+        return None
+    if target_sub and Path(target_sub).is_file():
+        from videotrans.util.help_srt import get_subtitle_from_srt
+        existing = get_subtitle_from_srt(target_sub)
+        if existing:
+            return existing
     return output
 
 
@@ -598,65 +605,51 @@ def run_adaptive_dubbing_rewrite(
         voice_role: str = "",
         voice_rate: str = "+0%",
         cache_folder: str = "",
+        target_sub: str = "",
         uuid=None,
 ) -> List[dict]:
-    """Create a duration-aware script and persist source anchors for TTS fitting."""
+    """Translate once per scene; reuse matching checkpoints before probing TTS."""
+    if not any(_source_text(row) for row in text_list):
+        return []
     model = _make_model(translate_type, uuid)
+    gap_ms = max(1, int(settings.get("adaptive_scene_gap_ms", 900)))
+    max_scene_ms = max(3000, int(float(settings.get("adaptive_scene_max_s", 30)) * 1000))
+    safety = min(0.95, max(0.65, float(settings.get("adaptive_safety_pct", 85)) / 100.0))
+    signature = _rewrite_signature(
+        text_list, source_code=source_code, target_code=target_code,
+        translate_type=translate_type, voice_role=voice_role, voice_rate=voice_rate,
+        gap_ms=gap_ms, max_scene_ms=max_scene_ms, safety=safety,
+        model_config={key: getattr(model, key, None) for key in (
+            "model_name", "api_url", "temperature", "reasoning_effort", "extra_body",
+        )},
+    )
+    path = Path(adaptive_metadata_path(cache_folder))
+    previous = _load_metadata(path)
+    if previous.get("version") != ALGORITHM_VERSION or previous.get("rewrite_signature") != signature:
+        previous = {}
+    cached = _cached_output(previous, target_sub)
+    if cached is not None:
+        return cached
+
     source_lang, target_lang = get_source_target_code(
-        show_source=source_code,
-        show_target=target_code,
-        translate_type=translate_type,
+        show_source=source_code, show_target=target_code, translate_type=translate_type,
     )
     source_lang = source_lang or source_code or "auto"
     target_lang = target_lang or target_code or "target language"
     pace = probe_target_sec_per_unit(
-        lang_code=target_code,
-        lang_name=target_lang,
-        voice_role=voice_role,
-        voice_rate=voice_rate,
-        cache_folder=cache_folder,
+        lang_code=target_code, lang_name=target_lang, voice_role=voice_role,
+        voice_rate=voice_rate, cache_folder=cache_folder,
     )
-    sec_per_unit = float(pace["sec_per_unit"])
-    times = [(int(it["start_time"]), int(it["end_time"])) for it in text_list]
-    gap_ms = int(settings.get("adaptive_scene_gap_ms", max(900, int(settings.get("min_silence_duration_ms", 600)))))
-    max_scene_ms = int(float(settings.get("adaptive_scene_max_s", 30)) * 1000)
-    safety = min(0.95, max(0.65, float(settings.get("adaptive_safety_pct", 85)) / 100.0))
-    spans = build_adaptive_scene_spans(
-        times,
-        scene_gap_ms=gap_ms,
-        max_scene_ms=max_scene_ms,
-    )
+    times = [(int(row["start_time"]), int(row["end_time"])) for row in text_list]
     planned_scenes = _build_scene_plans(
-        text_list,
-        times=times,
-        spans=spans,
-        sec_per_unit=sec_per_unit,
-        safety=safety,
+        text_list, times=times,
+        spans=build_adaptive_scene_spans(times, scene_gap_ms=gap_ms, max_scene_ms=max_scene_ms),
+        sec_per_unit=float(pace["sec_per_unit"]), safety=safety,
     )
-    path = Path(adaptive_metadata_path(cache_folder))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    signature = _rewrite_signature(
-        text_list,
-        source_code=source_code,
-        target_code=target_code,
-        translate_type=translate_type,
-        voice_role=voice_role,
-        voice_rate=voice_rate,
-        gap_ms=gap_ms,
-        max_scene_ms=max_scene_ms,
-        safety=safety,
-    )
-    cached_scenes = {}
-    if path.exists():
-        try:
-            previous = json.loads(path.read_text(encoding="utf-8"))
-            if previous.get("rewrite_signature") == signature:
-                cached_scenes = {
-                    (int(scene["source_lo"]), int(scene["source_hi"])): scene
-                    for scene in previous.get("scenes", [])
-                }
-        except (OSError, ValueError, TypeError, KeyError):
-            cached_scenes = {}
+    cached_scenes = {
+        (scene.get("source_lo"), scene.get("source_hi")): scene
+        for scene in previous.get("scenes", []) if isinstance(scene, dict)
+    }
     meta = {
         "version": ALGORITHM_VERSION,
         "complete": False,
@@ -666,53 +659,35 @@ def run_adaptive_dubbing_rewrite(
         "source_code": source_code,
         "target_code": target_code,
         "translate_type": int(translate_type),
-        "sec_per_unit": sec_per_unit,
+        "sec_per_unit": float(pace["sec_per_unit"]),
         "unit": pace["unit"],
         "voice": pace.get("voice", ""),
         "voice_rate": pace.get("rate", voice_rate),
         "scenes": [],
     }
-
-    for scene_no, plan in enumerate(planned_scenes, 1):
-        lo = int(plan["source_lo"])
-        hi = int(plan["source_hi"])
-        scene_sources = plan["source"]
-        fit_start = int(plan["fit_start_ms"])
-        fit_end = int(plan["fit_end_ms"])
-        window_s = max(0.2, (fit_end - fit_start) / 1000.0)
-        max_units = int(plan["max_units"])
-        context = plan["global_context"]
-        cached = cached_scenes.get((lo, hi))
-        if cached and not missing_source_ids(cached.get("records", []), [row["id"] for row in scene_sources]):
+    for scene_no, scene in enumerate(planned_scenes, 1):
+        cached = cached_scenes.get((scene["source_lo"], scene["source_hi"]))
+        if cached and not missing_source_ids(cached.get("records", []), [row["id"] for row in scene["source"]]):
             meta["scenes"].append(cached)
             logger.debug(f"Adaptive scene {scene_no}/{len(planned_scenes)} restored from checkpoint")
             continue
+        window_s = max(0.2, (scene["fit_end_ms"] - scene["fit_start_ms"]) / 1000.0)
         logger.debug(
-            f"Adaptive scene {scene_no}/{len(planned_scenes)} cues={lo + 1}-{hi + 1} "
-            f"window={window_s:.2f}s max={max_units} {pace['unit']}"
+            f"Adaptive scene {scene_no}/{len(planned_scenes)} "
+            f"window={window_s:.2f}s max={scene['max_units']} {pace['unit']}"
         )
         records = _rewrite_scene(
-            model=model,
-            scene_sources=scene_sources,
-            global_context=context,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            max_units=max_units,
-            unit=pace["unit"],
-            window_s=window_s,
+            model=model, scene_sources=scene["source"], global_context=scene["global_context"],
+            source_lang=source_lang, target_lang=target_lang,
+            max_units=scene["max_units"], unit=pace["unit"], window_s=window_s,
         )
-        by_id = {row["id"]: row for row in scene_sources}
-        for record in records:
-            record["anchor_ms"] = _anchor_for_ids(record["source_ids"], by_id)
-        plan["records"] = records
-        meta["scenes"].append(plan)
-        # Keep completed API scenes so the task Retry action can resume after a
-        # later scene fails instead of paying to rewrite the whole video again.
-        path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _set_scene_records(scene, records)
+        meta["scenes"].append(scene)
+        _save_metadata(path, meta)
 
     output = _rebuild_output(meta)
     meta["complete"] = True
-    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_metadata(path, meta)
     logger.debug(f"Adaptive dubbing rewrite: {len(text_list)} source cues -> {len(output)} cues")
     return output
 
@@ -816,18 +791,15 @@ def fit_adaptive_dubbing_from_audio(
                 window_s=available_ms / 1000.0,
                 tts_feedback=tts_feedback,
             )
-            by_id = {row["id"]: row for row in scene["source"]}
-            for record in records:
-                record["anchor_ms"] = _anchor_for_ids(record["source_ids"], by_id)
-            scene["records"] = records
+            _set_scene_records(scene, records)
             scene["max_units"] = new_max
             scene["fit"]["status"] = "rewritten_for_tts"
         output = _rebuild_output(meta)
-        path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _save_metadata(path, meta)
         return output, True
 
     if overflow:
-        path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _save_metadata(path, meta)
         details = ", ".join(
             f"scene {scene_index + 1}: {actual_ms / 1000:.2f}s/{available_ms / 1000:.2f}s "
             f"(needs {meta['scenes'][scene_index]['fit']['required_speed_pct']:.1f}% speed-up)"
@@ -846,5 +818,5 @@ def fit_adaptive_dubbing_from_audio(
             scene["fit"]["status"] = "fitted"
         elif status == "soft_speed":
             scene["fit"]["status"] = "fitted_soft_speed"
-    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_metadata(path, meta)
     return output, False

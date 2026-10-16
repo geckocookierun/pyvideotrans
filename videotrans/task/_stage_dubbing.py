@@ -1,4 +1,3 @@
-import copy
 import re
 import shutil
 import time
@@ -40,14 +39,14 @@ class DubbingMixin:
             self.signal(text='Skip tts')
             return
         adaptive = getattr(self.cfg, 'narration_mode', 'none') == 'adaptive'
-        max_rewrites = max(0, int(settings.get('adaptive_rewrite_retries', 2)))
+        max_rewrites = max(0, int(settings.get('adaptive_rewrite_retries', 2))) if adaptive else 0
         attempt = 0
         while True:
             self.queue_tts = self._build_tts_queue()
             if not self.queue_tts:
                 raise RuntimeError(f'字幕长度为0，无法继续配音')
 
-            if len([it.get("ref_wav") for it in self.queue_tts if it.get("ref_wav")]) > 0:
+            if any(it.get("ref_wav") for it in self.queue_tts):
                 self._create_ref_from_vocal()
 
             run_tts(
@@ -69,19 +68,16 @@ class DubbingMixin:
                     allow_rewrite=attempt < max_rewrites,
                     allow_soft_speed=bool(self.cfg.voice_autorate),
                 )
-                if fitted:
-                    self._save_srt_target(fitted, self.cfg.target_sub)
                 if needs_tts_again:
+                    self._save_srt_target(fitted, self.cfg.target_sub)
                     attempt += 1
                     self.signal(text=tr('Adaptive dubbing rewriting...'))
                     continue
                 if fitted and len(fitted) == len(self.queue_tts):
                     for queue_item, sub in zip(self.queue_tts, fitted):
-                        queue_item['start_time'] = sub['start_time']
-                        queue_item['end_time'] = sub['end_time']
-                        queue_item['startraw'] = sub['startraw']
-                        queue_item['endraw'] = sub['endraw']
-                        queue_item['time'] = sub['time']
+                        queue_item.update({key: sub[key] for key in (
+                            'start_time', 'end_time', 'startraw', 'endraw', 'time',
+                        )})
             break
 
         self._save_srt_target(self.queue_tts, self.cfg.target_sub)
@@ -137,7 +133,7 @@ class DubbingMixin:
                 tmp_dict['ref_wav'] = f"{self.cfg.cache_folder}/clone-{i}.wav"
                 tmp_dict['ref_language'] = _lang
             queue_tts.append(tmp_dict)
-        return copy.deepcopy(queue_tts)
+        return queue_tts
 
     def _cache_tts_outputs(self):
         outname=None
