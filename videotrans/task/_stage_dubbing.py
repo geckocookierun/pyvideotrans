@@ -38,47 +38,16 @@ class DubbingMixin:
         if not self.should_dubbing:
             self.signal(text='Skip tts')
             return
-        adaptive = getattr(self.cfg, 'narration_mode', 'none') == 'adaptive'
-        max_rewrites = max(0, int(settings.get('adaptive_rewrite_retries', 2))) if adaptive else 0
-        attempt = 0
-        while True:
-            self.queue_tts = self._build_tts_queue()
-            if not self.queue_tts:
-                raise RuntimeError(f'字幕长度为0，无法继续配音')
-
-            if any(it.get("ref_wav") for it in self.queue_tts):
-                self._create_ref_from_vocal()
-
-            run_tts(
-                queue_tts=self.queue_tts,
-                language=self.cfg.target_language_code,
-                uuid=self.uuid,
-                tts_type=self.cfg.tts_type,
-                is_cuda=self.cfg.is_cuda
-            )
-            self._cache_tts_outputs()
-
-            if adaptive:
-                from videotrans.translator._adaptive_dubbing import fit_adaptive_dubbing_from_audio
-                fitted, needs_tts_again = fit_adaptive_dubbing_from_audio(
-                    queue_tts=self.queue_tts,
-                    cache_folder=self.cfg.cache_folder,
-                    translate_type=self.cfg.translate_type,
-                    uuid=self.uuid,
-                    allow_rewrite=attempt < max_rewrites,
-                    allow_soft_speed=bool(self.cfg.voice_autorate),
-                )
-                if needs_tts_again:
-                    self._save_srt_target(fitted, self.cfg.target_sub)
-                    attempt += 1
-                    self.signal(text=tr('Adaptive dubbing rewriting...'))
-                    continue
-                if fitted and len(fitted) == len(self.queue_tts):
-                    for queue_item, sub in zip(self.queue_tts, fitted):
-                        queue_item.update({key: sub[key] for key in (
-                            'start_time', 'end_time', 'startraw', 'endraw', 'time',
-                        )})
-            break
+        self.queue_tts = self._build_tts_queue()
+        if not self.queue_tts:
+            raise RuntimeError('No subtitle cues available for dubbing')
+        if any(it.get("ref_wav") for it in self.queue_tts):
+            self._create_ref_from_vocal()
+        run_tts(
+            queue_tts=self.queue_tts, language=self.cfg.target_language_code,
+            uuid=self.uuid, tts_type=self.cfg.tts_type, is_cuda=self.cfg.is_cuda,
+        )
+        self._cache_tts_outputs()
 
         self._save_srt_target(self.queue_tts, self.cfg.target_sub)
 

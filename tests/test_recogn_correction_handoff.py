@@ -10,7 +10,7 @@ from videotrans.util.help_srt import get_subtitle_from_srt, get_srt_from_list
 
 
 @pytest.mark.parametrize('rephrase', [True, False])
-@pytest.mark.parametrize('mode', ['none', 'adaptive'])
+@pytest.mark.parametrize('mode', ['none', 'third'])
 def test_recognition_hands_corrected_text_to_translation(tmp_path, monkeypatch, rephrase, mode):
     raw = get_subtitle_from_srt(
         '1\n00:00:01,000 --> 00:00:03,000\nYou asked me no I asked her\n',
@@ -22,9 +22,6 @@ def test_recognition_hands_corrected_text_to_translation(tmp_path, monkeypatch, 
     )
     source = tmp_path / 'source.srt'
     target = tmp_path / 'target.srt'
-    if mode == 'adaptive':
-        # An existing target must not bypass adaptive source/config validation.
-        target.write_text('1\n00:00:01,000 --> 00:00:03,000\nOld translation\n')
     audio = tmp_path / 'source.wav'
     audio.write_bytes(b'audio')
     seen = []
@@ -66,7 +63,7 @@ def test_recognition_hands_corrected_text_to_translation(tmp_path, monkeypatch, 
         return kwargs['text_list']
 
     monkeypatch.setattr('videotrans.task._stage_translate.run_trans', translate)
-    monkeypatch.setattr('videotrans.translator._adaptive_dubbing.run_adaptive_dubbing_rewrite', translate)
+    monkeypatch.setattr('videotrans.translator._narration.run_third_person_narration', translate)
     task.check_target_sub = lambda source, target: target
     task.recogn()
     task.trans()

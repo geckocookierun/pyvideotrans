@@ -8,6 +8,7 @@ from videotrans.configure.config import tr, ROOT_DIR, settings, logger
 from videotrans.configure import constants
 from videotrans.configure.excepts import VideoTransError
 from videotrans.util.help_srt import get_subtitle_from_srt, simple_wrap, set_ass_font
+from videotrans.util._subtitle_display import split_display_cues
 
 
 class SubtitleMixin:
@@ -17,7 +18,9 @@ class SubtitleMixin:
         if not Path(self.cfg.target_sub).exists() :
             raise VideoTransError(tr("No valid subtitle file exists")+self.cfg.target_sub)
 
-        if not Path(self.cfg.source_sub).exists() or (self.cfg.source_language_code == self.cfg.target_language_code):
+        if (getattr(self.cfg, 'narration_mode', 'none') == 'third'
+                or not Path(self.cfg.source_sub).exists()
+                or self.cfg.source_language_code == self.cfg.target_language_code):
             if self.cfg.subtitle_type == 3:
                 self.cfg.subtitle_type = 1
             elif self.cfg.subtitle_type == 4:
@@ -27,7 +30,8 @@ class SubtitleMixin:
         maxlen = int(
             settings.get('cjk_len', 15) if self.cfg.target_language_code[:2] in constants.CJK_LANG else
             settings.get('other_len', 60))
-        target_sub_list = get_subtitle_from_srt(self.cfg.target_sub)
+        target_sub_list = split_display_cues(
+            get_subtitle_from_srt(self.cfg.target_sub))
 
         srt_string = ""
         _join_flag = ''
@@ -43,8 +47,9 @@ class SubtitleMixin:
             for i, it in enumerate(target_sub_list):
                 _text = simple_wrap(it['text'].strip(), maxlen, self.cfg.target_language_code)
                 srt_string += f"{it['line']}\n{it['time']}\n"
-                if source_length > 0 and i < source_length:
-                    _text_source = simple_wrap(source_sub_list[i]['text'], source_maxlen,
+                source_index = it['source_index']
+                if source_index < source_length:
+                    _text_source = simple_wrap(source_sub_list[source_index]['text'], source_maxlen,
                                                      self.cfg.source_language_code)
                     _text = f'{_text_source}\n{_join_flag}{_text}' if self.cfg.output_srt == 1 else f'{_text}\n{_join_flag}{_text_source}'
                 srt_string += f"{_text}\n\n"

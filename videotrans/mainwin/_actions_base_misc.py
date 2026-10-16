@@ -100,13 +100,11 @@ class WinActionBaseMiscMixin:
             data['backaudio_volume'] = 0.8
         if hasattr(m, 'narration_mode'):
             mode = m.narration_mode.currentData() or 'none'
-            if mode in ('line_third', 'line_first'):
-                mode = 'line'
-            if mode not in ('none', 'third', 'first', 'line', 'adaptive'):
+            if mode not in ('none', 'third'):
                 mode = 'none'
             data['narration_mode'] = mode
             data['third_person_narration'] = mode != 'none'
-            data['narration_style'] = 'first' if mode == 'first' else 'third'
+            data['narration_style'] = 'third'
         params.getset_params(data)
         try:
             settings['aisendsrt'] = m.aisendsrt.isChecked()

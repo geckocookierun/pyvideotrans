@@ -25,7 +25,8 @@ def qwen3asr_fun(
         **kw
 ):
     import torch
-    from videotrans.process._stt_utils import _write_log, _resegment
+    from videotrans.process._stt_utils import _write_log
+    from videotrans.process._source_cues import restore_transcript_punctuation, segment_aligned_source
     from transformers import AutoProcessor, AutoModelForMultimodalLM,AutoModelForTokenClassification
 
     try:
@@ -109,19 +110,21 @@ def qwen3asr_fun(
             if i == 0:
                 texts[0]['start'] = float(timestamps[0]['start_time']) + offset
 
+            aligned_words = []
             for item in timestamps:
-                texts[0]['words'].append({
+                aligned_words.append({
                     "word": item['text'], 
                     "start": float(item['start_time']) + offset, 
                     "end": float(item['end_time']) + offset
                 })
                 
+            texts[0]['words'].extend(restore_transcript_punctuation(aligned_words, transcript))
             _write_log(logs_file, json.dumps({"type": "subtitle", "text":transcript[:90]+"..." }))
             
             if i == len(srts) - 1:
                 texts[0]['end'] = float(timestamps[-1]['end_time']) + offset
 
-        srts = _resegment(texts, "zh" if language in ["Chinese", "Cantonese", "Japanese", "Korean"] else 'en', max_speech_ms, min_speech_ms, logs_file)
+        srts = segment_aligned_source(texts, "zh" if language in ["Chinese", "Cantonese", "Japanese", "Korean"] else 'en')
         return srts, None
     except BaseException as e:
         msg = traceback.format_exc()

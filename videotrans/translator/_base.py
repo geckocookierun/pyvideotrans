@@ -165,7 +165,7 @@ class BaseTrans(BaseCon):
                 result = self._item_task(srt_str.strip())
                 if not result.strip():
                     raise TranslateSrtError(tr("Translate result is empty")+f'\n{self=}')
-                self._set_cache(it, result)
+                self._set_cache(srt_str, result)
 
             self.signal(text=result, type='subtitle')
             raws_list.extend(get_subtitle_from_srt(result, is_file=False))

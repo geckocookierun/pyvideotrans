@@ -1,7 +1,29 @@
 import hashlib
+from pathlib import Path
 
 from videotrans.translator._base import BaseTrans
 from videotrans.task.taskcfg import SrtItem
+
+
+def test_srt_rerun_reuses_successful_batch(tmp_path, monkeypatch):
+    from videotrans.translator import _base
+    monkeypatch.setattr(_base, 'TEMP_ROOT', str(tmp_path))
+    Path(tmp_path / 'translate_cache').mkdir(exist_ok=True)
+    items = [_make_srt_item('hello')]
+    bt = BaseTrans(text_list=items, source_code='en', target_code='fr')
+    bt.is_test = False
+    bt.wait_sec = 0
+    monkeypatch.setattr(bt, '_exit', lambda: False)
+    monkeypatch.setattr(bt, 'signal', lambda **kwargs: None)
+    calls = []
+    def translate(value):
+        calls.append(value)
+        return '1\n00:00:00,000 --> 00:00:01,000\nBonjour'
+    monkeypatch.setattr(bt, '_item_task', translate)
+    first = bt._run_srt([items])
+    second = bt._run_srt([items])
+    assert first[0]['text'] == second[0]['text'] == 'Bonjour'
+    assert len(calls) == 1
 
 
 def _make_srt_item(text, line=1, start=0, end=1000):

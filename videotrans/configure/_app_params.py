@@ -291,7 +291,13 @@ class AppParams:
 
     def _apply_dict(self, data: Dict):
         for k, v in data.items():
+            if k == 'narration_mode' and v not in ('none', 'third'):
+                v = 'none'
+            if k == 'narration_style':
+                v = 'third'
             setattr(self, k, v)
+        self.third_person_narration = getattr(self, 'narration_mode', 'none') == 'third'
+
 
     def to_dict(self) -> Dict:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}

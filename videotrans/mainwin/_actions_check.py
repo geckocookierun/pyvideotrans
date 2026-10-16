@@ -247,16 +247,12 @@ class WinActionCheckMixin:
             narration_mode = self.main.narration_mode.currentData() or 'none'
         elif hasattr(self.main, 'third_person_narration') and hasattr(self.main.third_person_narration, 'isChecked'):
             narration_mode = 'third' if self.main.third_person_narration.isChecked() else 'none'
-        _ok_modes = ('none', 'third', 'first', 'line', 'adaptive')
+        _ok_modes = ('none', 'third')
         if narration_mode not in _ok_modes:
-            # Migrate removed line_third / line_first → line
-            if narration_mode in ('line_third', 'line_first'):
-                narration_mode = 'line'
-            else:
-                narration_mode = 'none'
+            narration_mode = 'none'
         self.cfg['narration_mode'] = narration_mode
         self.cfg['third_person_narration'] = narration_mode != 'none'
-        self.cfg['narration_style'] = 'first' if narration_mode == 'first' else 'third'
+        self.cfg['narration_style'] = 'third'
         if self.cfg['third_person_narration'] and self.cfg['translate_type'] not in translator.AI_TRANS_CHANNELS:
             show_error(tr("Third-person narration needs an AI chat channel"))
             self.main.startbtn.setDisabled(False)

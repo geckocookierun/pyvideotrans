@@ -36,7 +36,8 @@ class OpenAICampat(BaseTrans):
         transport (e.g. the LiteLLM channel routes through the litellm SDK)
         while reusing the shared prompt building, parsing and error handling.
         """
-        model = OpenAI(api_key=self.api_key, base_url=self.api_url)
+        # The callers already own retries; do not multiply their attempt limit.
+        model = OpenAI(api_key=self.api_key, base_url=self.api_url, max_retries=0)
         return model.chat.completions.create(**kwargs, extra_body=self.extra_body)
 
     @retry(retry=retry_if_not_exception_type(NO_RETRY_EXCEPT), stop=(stop_after_attempt(settings.get('retry_nums'))), wait=wait_fixed(2), before=before_log(logger, logging.INFO),after=after_log(logger, logging.INFO))

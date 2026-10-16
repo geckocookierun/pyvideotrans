@@ -12,14 +12,14 @@ Length budget is derived from:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import tempfile
-from copy import copy
-from dataclasses import is_dataclass, replace
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from videotrans.configure.config import logger, settings, tr
+from videotrans.configure.config import TEMP_ROOT, logger, settings, tr
 from videotrans.configure.constants import CJK_LANG
 from videotrans.translator._constants import AI_TRANS_CHANNELS
 from videotrans.translator._lang_utils import get_source_target_code
@@ -337,83 +337,15 @@ def probe_target_sec_per_unit(
     return _fallback_sec_per_unit(lang_code, lang_name, voice_rate)
 
 
-def compute_length_budget(
-        source_lines: Sequence[str],
-        window_s: float,
-        spoken_s: float,
-        source_lang: str,
-        target_lang: str,
-        sec_per_tgt: float,
-        tgt_unit: str = None,
-        pace_voice: str = '',
-        pace_rate: str = '',
-        *,
-        one_to_one: bool = False,
-) -> dict:
-    """Target length from scene timing + TTS-measured target speaking pace.
-
-    one_to_one (dialogue keep-gaps): budget from spoken_s only — using window_s
-    (which includes silence between cues) over-counted words and made dub audio
-    longer than the timeline (picture ahead of sound).
-    """
-    if not sec_per_tgt or sec_per_tgt <= 0.02:
+def compute_length_budget(source_lines, window_s, spoken_s, source_lang, target_lang,
+                          sec_per_tgt, tgt_unit=None):
+    """Soft scene budget; measured audio controls the final speed adjustment."""
+    if not sec_per_tgt or sec_per_tgt <= .02:
         raise RuntimeError(tr("Could not measure dubbing pace for third-person narration"))
-
-    source_text = "\n".join(source_lines)
-    src_units, src_unit = count_speaking_units(source_text, source_lang)
-    if not tgt_unit:
-        tgt_unit = 'characters' if _lang_is_cjk(target_lang) else 'words'
-
-    spoken_s = max(spoken_s, 0.1)
-    window_s = max(window_s, 0.1)
-    src_units = max(src_units, 1)
-    sec_per_src = spoken_s / src_units
-    src_rate = src_units / spoken_s
-
-    # Slight headroom vs continuous probe (names/punctuation).
-    effective_sec = sec_per_tgt * (1.12 if one_to_one else 1.10)
-    # Dialogue 1:1 must fit inside actual speech slots; scene narration may fill the wall window.
-    budget_s = spoken_s if one_to_one else window_s
-    ideal = max(1, int(round(budget_s / effective_sec)))
-    low = max(1, int(round(ideal * 0.90)))
-    high = max(ideal, int(round(ideal * (1.03 if one_to_one else 1.06))))
-
-    n_src = max(1, len([t for t in source_lines if (t or '').strip()]))
-    if tgt_unit == 'words':
-        by_length = max(1, int(round(ideal / 10)) + 1)
-    else:
-        by_length = max(1, int(round(ideal / 16)) + 1)
-    max_sentences = max(n_src, by_length)
-    max_sentences = min(max_sentences, max(n_src * 2, by_length))
-    min_sentences = max(1, min(n_src, 2 if ideal >= 18 else 1))
-    unit_cap = _narration_limits(target_lang)['unit_cap']
-    if one_to_one:
-        # Allow AI to emit several short complete lines per source beat.
-        min_sentences = n_src
-        max_sentences = max(n_src, min(n_src * 4, max(n_src * 2, by_length * 2)))
-
     return {
-        'window_s': window_s,
-        'spoken_s': spoken_s,
-        'budget_s': budget_s,
-        'src_units': src_units,
-        'src_unit': src_unit,
-        'tgt_unit': tgt_unit,
-        'ideal': ideal,
-        'low': low,
-        'high': high,
-        'min_sentences': min_sentences,
-        'max_sentences': max_sentences,
-        'n_src': n_src,
-        'unit_cap': unit_cap,
-        'src_rate': src_rate,
-        'sec_per_src': sec_per_src,
-        'sec_per_tgt': sec_per_tgt,
-        'effective_sec_per_tgt': effective_sec,
-        'method': 'tts_probe',
-        'pace_voice': pace_voice or '',
-        'pace_rate': pace_rate or '',
-        'one_to_one': one_to_one,
+        'window_s': max(.1, window_s),
+        'ideal': max(1, round(max(.1, window_s) / (sec_per_tgt * 1.10))),
+        'tgt_unit': tgt_unit or ('characters' if _lang_is_cjk(target_lang) else 'words'),
     }
 
 
@@ -509,51 +441,6 @@ def _split_text_for_cue_cap(text: str, lang: str, max_units: int) -> List[str]:
     return out or [text]
 
 
-def _pack_lines_into_slots(
-        lines: Sequence[str],
-        n_slots: int,
-        lang: str,
-) -> List[List[str]]:
-    """Assign AI short lines into original cue slots (keep gaps), by speaking weight."""
-    n_slots = max(1, int(n_slots))
-    cleaned = [(t or '').strip() or '…' for t in lines] or ['…']
-    if len(cleaned) <= n_slots:
-        groups = [[cleaned[i]] for i in range(len(cleaned))]
-        while len(groups) < n_slots:
-            groups.append(['…'])
-        return groups
-    units = [max(1, count_speaking_units(t, lang)[0]) for t in cleaned]
-    total_u = sum(units) or 1
-    # Start from even counts, then nudge boundaries toward speaking-weight shares.
-    base, rem = divmod(len(cleaned), n_slots)
-    sizes = [base + (1 if i < rem else 0) for i in range(n_slots)]
-    cuts = []
-    idx = 0
-    for sz in sizes[:-1]:
-        idx += sz
-        cuts.append(idx)
-    # Nudge each cut ±1 if it better matches cumulative weight targets.
-    for ci, cut in enumerate(list(cuts)):
-        target_u = total_u * (ci + 1) / n_slots
-        best = cut
-        best_err = abs(sum(units[:cut]) - target_u)
-        for cand in (cut - 1, cut + 1):
-            lo = cuts[ci - 1] + 1 if ci > 0 else 1
-            hi = (cuts[ci + 1] - 1) if ci + 1 < len(cuts) else (len(cleaned) - (n_slots - ci - 1))
-            if cand < lo or cand > hi:
-                continue
-            err = abs(sum(units[:cand]) - target_u)
-            if err < best_err:
-                best, best_err = cand, err
-        cuts[ci] = best
-    groups: List[List[str]] = []
-    prev = 0
-    for cut in cuts + [len(cleaned)]:
-        groups.append(cleaned[prev:cut] or ['…'])
-        prev = cut
-    return groups
-
-
 def build_timed_cues(
         texts: Sequence[str],
         start_ms: int,
@@ -594,50 +481,6 @@ def build_timed_cues(
     return out
 
 
-def build_one_to_one_cues(
-        source_times: Sequence[Tuple[int, int]],
-        new_lines: Sequence[str],
-        target_lang: str,
-        sec_per_tgt: float,
-        *,
-        max_cue_ms: Optional[int] = None,
-) -> List[Tuple[int, int, str]]:
-    """Map AI short complete lines onto original cue slots (keep gaps).
-
-    When the AI returns more lines than source cues, pack by speaking weight into
-    slots. Further splits only on sentence/comma — never mid-phrase word chops.
-    """
-    out: List[Tuple[int, int, str]] = []
-    lim = _narration_limits(target_lang)
-    min_cue_ms = lim['min_cue_ms']
-    max_cue_ms = lim['max_cue_ms'] if max_cue_ms is None else max(min_cue_ms, int(max_cue_ms))
-    max_units = _cue_unit_cap(target_lang, sec_per_tgt, max_cue_ms)
-    n = len(source_times)
-    if n <= 0:
-        return out
-    slot_groups = _pack_lines_into_slots(new_lines, n, target_lang)
-    for i in range(n):
-        a, b = int(source_times[i][0]), int(source_times[i][1])
-        if b <= a:
-            b = a + min_cue_ms
-        chunks: List[str] = []
-        for text in slot_groups[i]:
-            chunks.extend(_split_text_for_cue_cap(text, target_lang, max_units))
-        chunks = [c for c in chunks if c and c.strip()] or ['…']
-        if len(chunks) == 1:
-            speak_ms = int(count_speaking_units(chunks[0], target_lang)[0] * sec_per_tgt * 1000) + 200
-            dur = min(max_cue_ms, max(min_cue_ms, speak_ms), b - a)
-            out.append((a, a + dur, chunks[0]))
-            continue
-        usable_end = min(b, a + max_cue_ms * len(chunks))
-        for (s, e), chunk in zip(split_scene_times(a, usable_end, chunks, target_lang), chunks):
-            e = min(e, s + max_cue_ms, b)
-            if e <= s:
-                e = min(s + min_cue_ms, b)
-            out.append((s, e, chunk))
-    return out
-
-
 def clean_narration_lines(text: str) -> List[str]:
     text = re.sub(r'<think>.*?</think>', '', text or '', flags=re.I | re.S)
     text = re.sub(r'</?TRANSLATE_TEXT>', '', text, flags=re.I)
@@ -651,364 +494,7 @@ def clean_narration_lines(text: str) -> List[str]:
     return lines
 
 
-def _normalize_narration_style(style: str) -> str:
-    s = (style or 'third').strip().lower()
-    if s in ('first', '1st', 'character', 'pov', 'ngoi1'):
-        return 'first'
-    return 'third'
-
-
-def _pov_instructions(style: str) -> str:
-    if _normalize_narration_style(style) == 'first':
-        return (
-            "Retell this subtitle scene as FIRST-PERSON character narration for video dubbing.\n"
-            "Speak as the MAIN CHARACTER of this scene using I/me (or the natural first-person "
-            "form in the target language). Put yourself inside their body and feelings.\n"
-            "Pick the character with the strongest emotional stake in this scene "
-            "(usually the protagonist who is being pressured, deciding, or reacting).\n"
-            "Your own spoken lines become what YOU say or decide. "
-            "Other speakers become what you hear, face, or react to "
-            "(e.g. 'Father kept urging me…', 'She told me…') — do NOT switch to a third-person narrator.\n"
-            "Stay in one consistent first-person identity for the whole scene.\n"
-        )
-    return (
-        "Retell this subtitle scene as third-person narration for video dubbing.\n"
-        "Write as a narrator who just watched the scene.\n"
-        "Change verbs and phrasing into third person. Every sentence needs a clear subject and verb.\n"
-    )
-
-
-def line_rewrite_prompt(
-        source_lines: Sequence[str],
-        source_lang: str,
-        target_lang: str,
-) -> str:
-    """1:1 cues/timestamps, but wording rewritten like third-person narration (not literal translate)."""
-    source = "\n".join(f"{i}. {text}" for i, text in enumerate(source_lines, 1))
-    target = (target_lang or '').strip() or 'the target language'
-    source_name = (source_lang or '').strip() or 'auto'
-    n = len(source_lines)
-    return (
-        f"REWRITE each subtitle into {target} as THIRD-PERSON narration for video dubbing.\n"
-        "Same rewriting depth as scene third-person narration: brand-new complete sentences, "
-        "a narrator retelling that beat — NOT a literal / word-for-word translation of the dialogue.\n"
-        "Forbidden: direct translation that keeps the original spoken line shape "
-        "(e.g. do not keep 'I refuse' as 'I refuse' in the target language).\n"
-        "Required: third-person narrator wording with clear subject + verb "
-        "(e.g. 'She firmly refused…', 'Father kept urging her…').\n"
-        "Change verbs and phrasing into third person. Every output line must sound narrated, not dubbed dialogue.\n"
-        f"STRUCTURE (1:1): output EXACTLY {n} lines — one rewritten sentence per source line, same order. "
-        "Do NOT merge, split, skip, or add lines. Do NOT retime — only rewrite text.\n"
-        "Keep roughly the same spoken length as each source line (compress if needed).\n"
-        "Preserve names, numbers, relationships, threats, decisions, and emotional stance.\n"
-        f"Source language: {source_name}. Target language: {target}.\n"
-        "\n"
-        "Source lines:\n"
-        f"{source}\n"
-        "\n"
-        "# OUTPUT FORMAT\n"
-        f"Output ONLY the {n} rewritten narration lines inside <TRANSLATE_TEXT> and </TRANSLATE_TEXT>, "
-        "one sentence per source line.\n"
-        "\n"
-        "<INPUT>\n"
-        "{batch_input}\n"
-        "</INPUT>"
-    )
-
-
 LINE_REWRITE_BATCH = 12
-
-
-def run_line_narration_rewrite(
-        *,
-        text_list: List,
-        translate_type: int,
-        source_code: str = '',
-        target_code: str = '',
-        uuid=None,
-) -> List:
-    """1:1 cues/timestamps; rewrite each line like third-person narration (not literal translate)."""
-    if int(translate_type) not in AI_TRANS_CHANNELS:
-        raise RuntimeError(tr("Third-person narration needs an AI chat channel"))
-
-    from videotrans.translator._openaicompat import OpenAICampat
-    from videotrans.translator._runner import get_model_transobj
-
-    model = get_model_transobj(translate_type=translate_type, uuid=uuid)
-    if not isinstance(model, OpenAICampat):
-        raise RuntimeError(tr("Third-person narration needs an AI chat channel"))
-    if getattr(model, 'ainame', '') == 'openrouter':
-        model.extra_body = {"reasoning": {"enabled": False}}
-    # Match scene narration creativity so the model does not fall back to literal translate.
-    model.temperature = 0.45
-
-    source_lang, target_lang = get_source_target_code(
-        show_source=source_code,
-        show_target=target_code,
-        translate_type=translate_type,
-    )
-    source_lang = source_lang or source_code or 'auto'
-    target_lang = target_lang or target_code or 'target language'
-
-    results = []
-    n = len(text_list)
-    for start in range(0, n, LINE_REWRITE_BATCH):
-        batch = text_list[start:start + LINE_REWRITE_BATCH]
-        source_lines = []
-        for it in batch:
-            t = (it.get('text') if hasattr(it, 'get') else it['text']) or ''
-            source_lines.append(t.strip() or '…')
-        joined = "\n".join(source_lines)
-        model.prompt = line_rewrite_prompt(source_lines, source_lang, target_lang)
-        try:
-            raw = model._item_task(joined)
-        except Exception as e:
-            logger.exception(f'Line rewrite failed at {start + 1}: {e}')
-            raise
-        new_lines = clean_narration_lines(raw or '')
-        if len(new_lines) != len(source_lines):
-            logger.warning(
-                f'Line rewrite count mismatch at {start + 1}: '
-                f'got {len(new_lines)} want {len(source_lines)}; retrying'
-            )
-            model.prompt = line_rewrite_prompt(source_lines, source_lang, target_lang) + (
-                f"\nREMINDER: you MUST output exactly {len(source_lines)} lines.\n"
-            )
-            try:
-                raw2 = model._item_task(joined)
-                retry = clean_narration_lines(raw2 or '')
-                if len(retry) == len(source_lines):
-                    new_lines = retry
-            except Exception as e:
-                logger.exception(f'Line rewrite retry failed: {e}')
-                raise
-        if len(new_lines) < len(source_lines):
-            new_lines = new_lines + source_lines[len(new_lines):]
-        elif len(new_lines) > len(source_lines):
-            new_lines = new_lines[:len(source_lines)]
-
-        for it, text in zip(batch, new_lines):
-            # SrtItem is a dataclass whose __iter__ yields field names — never dict(it).
-            if is_dataclass(it) and not isinstance(it, type):
-                results.append(replace(it, text=text))
-            elif isinstance(it, dict):
-                results.append({**it, 'text': text})
-            else:
-                item = copy(it)
-                item['text'] = text
-                results.append(item)
-
-    logger.debug(f'Line rewrite 1:1: {n} cues (target={target_lang})')
-    return results
-
-
-def _dialogue_rewrite_instructions(target: str) -> str:
-    """1:1 mode: translate spoken lines, then polish — keep dialogue voice (not narrator POV)."""
-    return (
-        f"For each source subtitle, TRANSLATE the spoken line into {target}, then REWRITE the wording "
-        "so it sounds natural for video dubbing.\n"
-        "Two steps in one output line: (1) direct dialogue translation of that speaker's words, "
-        "(2) polish / rewrite the phrasing — not a stiff word-for-word gloss.\n"
-        "Keep dialogue voice: preserve I/you/he/she as that speaker uses them. "
-        "Do NOT convert into third-person narrator style "
-        "(forbidden: 'She refused…', 'Father told her…' when the source is the character speaking).\n"
-        "Allowed example: '我不答应' → 'Tôi nhất quyết không đồng ý cuộc hôn nhân này'.\n"
-        "Forbidden example: '我不答应' → 'Cô ấy nhất quyết từ chối cuộc hôn nhân đó'.\n"
-    )
-
-
-def narration_prompt(
-        source_lines: Sequence[str],
-        budget: dict,
-        source_lang: str,
-        target_lang: str,
-        style: str = 'third',
-        one_to_one: bool = False,
-) -> str:
-    source = "\n".join(f"{i}. {text}" for i, text in enumerate(source_lines, 1))
-    target = (target_lang or '').strip() or 'the target language'
-    source_name = (source_lang or '').strip() or 'auto'
-    unit = budget['tgt_unit']
-    pace = budget.get('effective_sec_per_tgt') or budget.get('sec_per_tgt') or 0
-    n_src = budget.get('n_src') or max(1, len(source_lines))
-    pace_note = ''
-    if pace > 0:
-        pace_note = (
-            f"This dubbing voice needs about {pace:.3f}s per {unit.rstrip('s')} "
-            f"(≈{1.0 / pace:.2f} {unit}/s including short pauses).\n"
-        )
-    style = _normalize_narration_style(style)
-    unit_cap = int(budget.get('unit_cap') or _narration_limits(target_lang)['unit_cap'])
-    if one_to_one:
-        lead = _dialogue_rewrite_instructions(target)
-        structure = (
-            f"STRUCTURE (1:1 meaning, short cues): cover every numbered source beat in order. "
-            f"You MAY output MORE than {n_src} lines when a beat needs several short spoken cues. "
-            "Do NOT merge or skip source beats.\n"
-            "YOU split long speech into short COMPLETE spoken lines yourself — "
-            "the system will NOT chop words mid-phrase.\n"
-            f"Each OUTPUT LINE ≈ ≤{unit_cap} {unit}, a complete spoken phrase "
-            "(subject+verb or natural breath group that can stand alone).\n"
-            "FORBIDDEN: incomplete fragments / dangling particles / lone words "
-            "(e.g. ending a cue on 'gỗ,' / 'ích' / 'nhé' alone).\n"
-            "If two complete breath groups belong together, put them on separate lines "
-            "OR join with a comma (comma groups also become separate timestamps).\n"
-            "Do NOT delete names, verbs, or mid-sentence meaning to shorten.\n"
-        )
-        sentence_rule = (
-            f"Use {budget['min_sentences']}–{budget['max_sentences']} lines "
-            f"(at least {n_src}). One COMPLETE short phrase per line. "
-            "No multi-sentence lines. Never leave a cue mid-phrase.\n"
-        )
-        rewrite_note = (
-            "Do NOT leave a raw literal gloss — after translating, rewrite for natural spoken dubbing.\n"
-            "Shorten only by tighter phrasing — never by cutting out the middle of the sentence.\n"
-        )
-    else:
-        lead = _pov_instructions(style)
-        structure = (
-            "Stay CLOSE to the dialogue: cover every speaker turn / plot beat from the source lines. "
-            "Do not skip lines, omit replies, or summarize the scene into a vague outline.\n"
-            "Do NOT translate word-for-word line by line, but each source line's meaning must still appear. "
-            "Prefer one complete narration sentence per source beat. "
-            "Never put two story beats into one line. "
-            f"YOU emit short COMPLETE lines (≈ ≤{unit_cap} {unit}); "
-            "do not rely on mid-phrase word chopping.\n"
-        )
-        sentence_rule = (
-            f"Use {budget['min_sentences']}–{budget['max_sentences']} complete sentences, "
-            "one sentence per line. No multi-sentence lines. Never leave a cue mid-phrase.\n"
-        )
-        rewrite_note = (
-            "Do NOT translate word-for-word; rewrite as narration with clear subject and verb.\n"
-        )
-    return (
-        f"{lead}"
-        f"Write in {target} only. Do not write in the source language.\n"
-        f"{structure}"
-        f"{rewrite_note}"
-        "Preserve names, numbers, relationships, threats, decisions, and emotional stance. "
-        "If the length limit is tight, use shorter phrases — never delete mid-sentence words or names.\n"
-        f"Source language: {source_name}. Target language: {target}.\n"
-        f"There are {n_src} source lines in this scene — cover all of them.\n"
-        "\n"
-        "# TIMING BUDGET (must obey)\n"
-        f"Scene wall time: {budget['window_s']:.1f}s; "
-        f"speakable budget: {budget.get('budget_s', budget['window_s']):.1f}s "
-        f"(source speech ≈{budget['spoken_s']:.1f}s, {budget['src_units']} source {budget['src_unit']}).\n"
-        f"{pace_note}"
-        f"Length for the whole scene: about {budget['ideal']} {unit} "
-        f"(range {budget['low']}–{budget['high']} {unit}; do not exceed {budget['high']}).\n"
-        f"{sentence_rule}"
-        "\n"
-        "Source lines:\n"
-        f"{source}\n"
-        "\n"
-        "# OUTPUT FORMAT\n"
-        "Output ONLY the result inside <TRANSLATE_TEXT> and </TRANSLATE_TEXT>.\n"
-        "\n"
-        "<INPUT>\n"
-        "{batch_input}\n"
-        "</INPUT>"
-    )
-
-
-def narration_shorten_prompt(
-        source_lines: Sequence[str],
-        draft_lines: Sequence[str],
-        budget: dict,
-        target_lang: str,
-        current_units: int,
-        style: str = 'third',
-        one_to_one: bool = False,
-) -> str:
-    target = (target_lang or '').strip() or 'the target language'
-    unit = budget['tgt_unit']
-    source = "\n".join(f"{i}. {text}" for i, text in enumerate(source_lines, 1))
-    draft = "\n".join(draft_lines)
-    style = _normalize_narration_style(style)
-    n_src = budget.get('n_src') or max(1, len(source_lines))
-    unit_cap = int(budget.get('unit_cap') or _narration_limits(target_lang)['unit_cap'])
-    if one_to_one:
-        mode = (
-            f"polished DIALOGUE in {target} (translate then rewrite; keep speaker I/you/he; "
-            "NOT third-person narrator)"
-        )
-        count_rule = (
-            f"Keep at least {n_src} and at most {budget.get('max_sentences', n_src)} lines. "
-            f"Each line a COMPLETE short phrase (≈ ≤{unit_cap} {unit}). "
-            "You may use extra lines to split long speech — never mid-phrase fragments.\n"
-        )
-    else:
-        mode = (
-            "first-person character narration (I/me, stay inside the protagonist)"
-            if style == 'first'
-            else "third-person narration"
-        )
-        count_rule = "One complete sentence per line. No labels.\n"
-    return (
-        f"The draft below is TOO LONG for dubbing ({current_units} {unit}, "
-        f"max {budget['high']} {unit} for a "
-        f"{budget.get('budget_s', budget['window_s']):.1f}s speakable window).\n"
-        f"Rewrite the WHOLE scene again in {target} only as {mode}.\n"
-        f"Total length MUST be ≤ {budget['high']} {unit} (aim ≈ {budget['ideal']} {unit}).\n"
-        "CRITICAL: stay close to the source — cover every dialogue beat. "
-        "Shorten by compressing phrases, NOT by deleting plot points, replies, or names.\n"
-        f"{count_rule}"
-        "\n"
-        "Source meaning (must all remain):\n"
-        f"{source}\n"
-        "\n"
-        "Overlong draft:\n"
-        f"{draft}\n"
-        "\n"
-        "# OUTPUT FORMAT\n"
-        f"Output ONLY {target} text inside <TRANSLATE_TEXT> and </TRANSLATE_TEXT>.\n"
-        "\n"
-        "<INPUT>\n"
-        "{batch_input}\n"
-        "</INPUT>"
-    )
-
-
-def count_lines_units(lines: Sequence[str], lang: str) -> int:
-    return sum(count_speaking_units(line, lang)[0] for line in lines)
-
-
-def trim_lines_to_budget(lines: List[str], lang: str, high: int) -> List[str]:
-    """Drop trailing sentences until total units ≤ high (keep at least one)."""
-    if not lines:
-        return lines
-    out = list(lines)
-    while len(out) > 1 and count_lines_units(out, lang) > high:
-        out.pop()
-    # If a single line is still over, leave it — shorten rewrite should have handled it.
-    return out
-
-
-def shrink_lines_to_budget(lines: List[str], lang: str, high: int) -> List[str]:
-    """Keep line count; shorten longest lines until total units ≤ high (for 1:1 mode)."""
-    if not lines or high < 1:
-        return lines
-    out = list(lines)
-    # Up to enough passes to shave long lines without dropping cues.
-    for _ in range(80):
-        if count_lines_units(out, lang) <= high:
-            break
-        # Shorten the currently longest line by ~15% units.
-        idx = max(range(len(out)), key=lambda i: count_speaking_units(out[i], lang)[0])
-        text = out[idx] or ''
-        n, unit = count_speaking_units(text, lang)
-        if n <= 1:
-            break
-        keep = max(1, int(n * 0.85))
-        if unit == 'characters' or (_lang_is_cjk(lang) or _text_is_cjk_heavy(text)):
-            chars = CJK_CHAR_RE.findall(text) or list(re.sub(r'\s+', '', text))
-            out[idx] = ''.join(chars[:keep])
-        else:
-            words = WORD_RE.findall(text) or text.split()
-            out[idx] = ' '.join(words[:keep])
-    return out
 
 
 def _make_srt_item(line: int, start_ms: int, end_ms: int, text: str) -> dict:
@@ -1027,179 +513,88 @@ def _make_srt_item(line: int, start_ms: int, end_ms: int, text: str) -> dict:
     }
 
 
-def run_third_person_narration(
-        *,
-        text_list: List,
-        translate_type: int,
-        source_code: str = '',
-        target_code: str = '',
-        voice_role: str = '',
-        voice_rate: str = '+0%',
-        cache_folder: str = '',
-        uuid=None,
-        narration_style: str = 'third',
-        one_to_one: bool = False,
-) -> List:
-    """Rewrite source cues as scene-level narration with new timestamps.
+def narration_prompt(budget, source_lang, target_lang):
+    return (
+        f"Retell this scene from {source_lang} as third-person narration in {target_lang} only. "
+        "Keep every source beat in its original order. Preserve subjects, actions, recipients, "
+        "names, relationships, negation and replies. Do not invent events or omit meaning. "
+        "Use short complete spoken phrases, about 2–4 seconds each, one phrase per line. "
+        "Split long sentences at natural clause boundaries; do not merge neighboring story beats "
+        "into a paragraph. Never split a name or leave a dangling fragment. "
+        f"Aim for about {budget['ideal']} {budget['tgt_unit']} over this "
+        f"{budget['window_s']:.2f}-second scene. This is a guide, not permission to delete content. "
+        "Use concise natural wording; timing will be adjusted after speech synthesis. "
+        "Output only the narration, one short cue per line, inside <TRANSLATE_TEXT>.\n"
+        + "\n<INPUT>\n{batch_input}\n</INPUT>"
+    )
 
-    one_to_one=True: same pipeline (scene windows, TTS word budget, retime),
-    but prompt = translate each spoken line then polish (dialogue voice, not narrator POV).
-    """
-    style = _normalize_narration_style(narration_style)
-    if int(translate_type) not in AI_TRANS_CHANNELS:
-        raise RuntimeError(tr("Third-person narration needs an AI chat channel"))
 
+def _scene_narration(model, source_text, translate_type):
+    """Checkpoint validated scene text independently of per-run media caches."""
+    identity = dict(version=1, channel=translate_type, prompt=model.prompt, source=source_text)
+    for name in ('api_url', 'model_name', 'temperature', 'max_tokens',
+                 'reasoning_effort', 'extra_body'):
+        identity[name] = getattr(model, name, None)
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    cache = Path(TEMP_ROOT, 'translate_cache', 'narration', key + '.txt')
+    use_cache = not getattr(model, 'is_test', False)
+    if use_cache and cache.is_file():
+        lines = clean_narration_lines(cache.read_text(encoding='utf-8'))
+        if lines:
+            return lines
+    lines = clean_narration_lines(model._item_task(source_text) or '')
+    if not lines:
+        raise RuntimeError(tr("Third-person narration returned empty text for a scene"))
+    if use_cache:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic publication prevents interrupted writes becoming valid checkpoints.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                             dir=cache.parent, delete=False) as out:
+                temporary = Path(out.name)
+                out.write('\n'.join(lines))
+            temporary.replace(cache)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    return lines
+
+
+def run_third_person_narration(*, text_list, translate_type, source_code='', target_code='',
+                               voice_role='', voice_rate='+0%', cache_folder='', uuid=None):
+    """One rewrite per scene; shared media alignment handles timing without text loss."""
     from videotrans.translator._openaicompat import OpenAICampat
     from videotrans.translator._runner import get_model_transobj
-
+    if int(translate_type) not in AI_TRANS_CHANNELS:
+        raise RuntimeError(tr("Third-person narration needs an AI chat channel"))
     model = get_model_transobj(translate_type=translate_type, uuid=uuid)
     if not isinstance(model, OpenAICampat):
         raise RuntimeError(tr("Third-person narration needs an AI chat channel"))
     if getattr(model, 'ainame', '') == 'openrouter':
         model.extra_body = {"reasoning": {"enabled": False}}
     model.temperature = 0.4
-
     source_lang, target_lang = get_source_target_code(
-        show_source=source_code,
-        show_target=target_code,
-        translate_type=translate_type,
-    )
+        show_source=source_code, show_target=target_code, translate_type=translate_type)
     source_lang = source_lang or source_code or 'auto'
-    target_lang = target_lang or target_code or 'target language'
-
-    # One TTS pace probe per job; falls back if Edge-TTS is temporarily blocked (403).
-    pace = probe_target_sec_per_unit(
-        lang_code=target_code or '',
-        lang_name=target_lang,
-        voice_role=voice_role or '',
-        voice_rate=voice_rate or '+0%',
-        cache_folder=cache_folder or '',
-    )
-    sec_per_tgt = pace['sec_per_unit']
-    pace_unit = pace['unit']
-    pace_voice = pace['voice']
-    pace_rate = pace['rate']
-    logger.debug(
-        f'Narration TTS pace: {pace_voice} rate={pace_rate} style={style} '
-        f'fallback={bool(pace.get("fallback"))} -> '
-        f'{sec_per_tgt:.4f}s/{pace_unit.rstrip("s")} ({1.0 / sec_per_tgt:.2f} {pace_unit}/s)'
-    )
-
+    target_lang = target_lang or target_code
+    pace = probe_target_sec_per_unit(lang_code=target_code, lang_name=target_lang,
+                                     voice_role=voice_role, voice_rate=voice_rate,
+                                     cache_folder=cache_folder)
     times = [(int(it['start_time']), int(it['end_time'])) for it in text_list]
-    spans = expand_scene_spans(times)
     results = []
-    line_no = 1
-
-    for lo, hi in spans:
-        source_lines = [(text_list[i].get('text') if hasattr(text_list[i], 'get') else text_list[i]['text'] or '').strip()
-                        for i in range(lo, hi + 1)]
-        source_lines = [t for t in source_lines if t]
+    for lo, hi in expand_scene_spans(times):
+        source_lines = [text_list[i]['text'].strip() for i in range(lo, hi + 1)
+                        if text_list[i]['text'].strip()]
         if not source_lines:
             continue
-        start_ms, end_ms = times[lo][0], times[hi][1]
         window_s, spoken_s = scene_timing(times, lo, hi)
-        budget = compute_length_budget(
-            source_lines, window_s, spoken_s, source_lang, target_lang,
-            sec_per_tgt=sec_per_tgt,
-            tgt_unit=pace_unit,
-            pace_voice=pace_voice,
-            pace_rate=pace_rate,
-            one_to_one=one_to_one,
-        )
-        if one_to_one:
-            n_src = budget['n_src']
-            # Keep AI-allowed range (short complete lines may exceed n_src).
-            budget['min_sentences'] = n_src
-            budget['max_sentences'] = max(
-                budget.get('max_sentences') or n_src,
-                n_src,
-            )
-        logger.debug(
-            f'Narration budget scene {lo + 1}-{hi + 1}: window={window_s:.1f}s '
-            f'spoken={spoken_s:.1f}s budget_s={budget.get("budget_s", window_s):.1f}s '
-            f'rate={pace_rate} style={style} one_to_one={one_to_one} -> ideal={budget["ideal"]} '
-            f'{budget["tgt_unit"]} [{budget["low"]}-{budget["high"]}]'
-        )
-        joined = "\n".join(source_lines)
-        model.prompt = narration_prompt(
-            source_lines, budget, source_lang, target_lang, style=style, one_to_one=one_to_one
-        )
-        try:
-            raw = model._item_task(joined)
-        except Exception as e:
-            logger.exception(f'Narration failed for lines {lo + 1}-{hi + 1}: {e}')
-            raise
-        new_lines = clean_narration_lines(raw or '')
-        if not new_lines:
-            raise RuntimeError(
-                tr("Third-person narration returned empty text for a scene")
-            )
-
-        # Enforce length without gutting dialogue: up to 2 compress rewrites, trim last.
-        got = count_lines_units(new_lines, target_lang)
-        for attempt in range(2):
-            if got <= budget['high']:
-                break
-            logger.warning(
-                f'Scene {lo + 1}-{hi + 1} over budget ({got}>{budget["high"]} '
-                f'{budget["tgt_unit"]}); compress rewrite #{attempt + 1}'
-            )
-            model.prompt = narration_shorten_prompt(
-                source_lines, new_lines, budget, target_lang, got,
-                style=style, one_to_one=one_to_one,
-            )
-            try:
-                raw2 = model._item_task(joined)
-                shortened = clean_narration_lines(raw2 or '')
-                if shortened:
-                    new_lines = shortened
-            except Exception as e:
-                logger.exception(f'Narration shorten failed for scene {lo + 1}-{hi + 1}: {e}')
-                raise
-            got = count_lines_units(new_lines, target_lang)
-        if got > budget['high']:
-            before = got
-            if one_to_one:
-                # Never hard-truncate words (that deletes mid/end meaning).
-                # Cue splitter + TTS rate will absorb modest over-budget text.
-                logger.warning(
-                    f'Scene {lo + 1}-{hi + 1} still over after compress '
-                    f'({before}>{budget["high"]} {budget["tgt_unit"]}); '
-                    f'keeping full wording (no truncate)'
-                )
-            else:
-                new_lines = trim_lines_to_budget(new_lines, target_lang, budget['high'])
-                logger.warning(
-                    f'Scene {lo + 1}-{hi + 1} still over after compress '
-                    f'({before} {budget["tgt_unit"]}); trimmed to '
-                    f'{count_lines_units(new_lines, target_lang)}'
-                )
-
-        if one_to_one:
-            n_src = budget['n_src']
-            if len(new_lines) < n_src:
-                new_lines = new_lines + source_lines[len(new_lines):n_src]
-            # Keep original cue gaps; pack extra short AI lines into slots (no truncate).
-            src_times_ne = []
-            for i in range(lo, hi + 1):
-                t = (text_list[i].get('text') if hasattr(text_list[i], 'get') else text_list[i]['text'] or '').strip()
-                if t:
-                    src_times_ne.append(times[i])
-            timed = build_one_to_one_cues(
-                src_times_ne, new_lines, target_lang, sec_per_tgt
-            )
-        else:
-            timed = build_timed_cues(
-                new_lines, start_ms, end_ms, target_lang, sec_per_tgt
-            )
-
-        for a, b, text in timed:
-            results.append(_make_srt_item(line_no, a, b, text))
-            line_no += 1
-
-    logger.debug(
-        f'Narration style={style} one_to_one={one_to_one}: '
-        f'{len(text_list)} source cues -> {len(results)} narration cues '
-        f'(target={target_lang})'
-    )
+        budget = compute_length_budget(source_lines, window_s, spoken_s, source_lang, target_lang,
+                                       sec_per_tgt=pace['sec_per_unit'], tgt_unit=pace['unit'])
+        model.prompt = narration_prompt(budget, source_lang, target_lang)
+        new_lines = _scene_narration(model, '\n'.join(source_lines), translate_type)
+        # Keep every returned word even when the estimated budget is exceeded.
+        for a, b, text in build_timed_cues(new_lines, times[lo][0], times[hi][1],
+                                         target_lang, pace['sec_per_unit']):
+            results.append(_make_srt_item(len(results) + 1, a, b, text))
     return results

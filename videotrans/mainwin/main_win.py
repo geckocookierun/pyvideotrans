@@ -195,11 +195,9 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         self.rephrase.setChecked(bool(params.get('rephrase', False)))
         if hasattr(self, 'narration_mode'):
             mode = params.get('narration_mode')
-            if mode in ('line_third', 'line_first'):
-                mode = 'line'
-            if mode not in ('none', 'third', 'first', 'line', 'adaptive'):
+            if mode not in ('none', 'third'):
                 # Migrate old checkbox param.
-                mode = 'third' if params.get('third_person_narration') else 'none'
+                mode = 'none'
             idx = self.narration_mode.findData(mode)
             self.narration_mode.setCurrentIndex(idx if idx >= 0 else 0)
         elif hasattr(self, 'third_person_narration') and hasattr(self.third_person_narration, 'setChecked'):

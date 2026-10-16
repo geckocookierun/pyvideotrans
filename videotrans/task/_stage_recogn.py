@@ -27,6 +27,7 @@ class RecognMixin:
             self.source_srt_list = get_subtitle_from_srt(self.cfg.source_sub, is_file=True)
             if Path(self.cfg.target_dir + "/speaker.json").exists():
                 shutil.copy2(self.cfg.target_dir + "/speaker.json", self.cfg.cache_folder + "/speaker.json")
+            self._repair_source_cues()
             self._recogn_succeed()
             return
 
@@ -114,9 +115,35 @@ class RecognMixin:
             # Translation reads source_sub from disk, not source_srt_list.
             self._save_srt_target(self.source_srt_list, self.cfg.source_sub)
         
+        self._repair_source_cues()
         self._recogn_succeed()
         self.signal(text=tr('endtiquzimu'))
         logger.debug(f'[语音识别阶段结束耗时]:{time.time()-_st}s')
+
+    def _repair_source_cues(self):
+        from videotrans.recognition._constants import QWENASR
+        from videotrans.process._source_cues import repair_source_fragments
+        if self.cfg.recogn_type != QWENASR:
+            return
+        # Speaker maps are indexed by old cue number. Do not merge an external
+        # map without the associated speaker labels attached to the cues.
+        if Path(self.cfg.target_dir, 'speaker.json').exists():
+            return
+        repaired = repair_source_fragments(self.source_srt_list, self.cfg.detect_language)
+        if len(repaired) == len(self.source_srt_list):
+            return
+        tag = f'cue-backup-{time.time_ns()}'
+        source = Path(self.cfg.source_sub)
+        if source.is_file():
+            shutil.copy2(source, source.with_name(source.name + '.' + tag))
+        target = Path(self.cfg.target_sub)
+        # Translation must be regenerated for changed source boundaries. Keep
+        # the previous result recoverable instead of deleting edited subtitles.
+        if self.should_trans and target.is_file() and target.resolve() != source.resolve():
+            target.rename(target.with_name(target.name + '.' + tag))
+        self.source_srt_list = repaired
+        self._save_srt_target(repaired, self.cfg.source_sub)
+        logger.info(f'Repaired source cue boundaries: {len(repaired)} cues; old subtitles backed up')
 
     def _recogn_succeed(self) -> None:
         self.precent += 5

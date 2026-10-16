@@ -147,16 +147,10 @@ class AppSettings:
             "noise_separate_nums": 4,
             "aitrans_temperature": 0.1,
             "aitrans_context": False,
-            "adaptive_scene_gap_ms": 900,
-            "adaptive_scene_max_s": 30,
-            "adaptive_safety_pct": 85,
-            "adaptive_hamed_speed_pct": 20,
-            "adaptive_namminh_speed_pct": 20,
-            "adaptive_rewrite_retries": 2,
             "batch_nums": 0,
             "uvr_models": "spleeter",
 
-            "max_audio_speed_rate": 50,
+            "max_audio_speed_rate": 1.25,
             "max_video_pts_rate": 10,
 
             "threshold": 0.45,
@@ -214,8 +208,11 @@ class AppSettings:
 
     def _apply_dict(self, data: Dict):
         for k, v in data.items():
-            attr_name = k
-            setattr(self, attr_name, v)
+            if k.startswith('adaptive_'):
+                continue
+            if k == 'max_audio_speed_rate' and str(v) in ('50', '50.0'):
+                v = 1.25
+            setattr(self, k, v)
 
     def to_dict(self) -> Dict:
         data = {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
@@ -246,6 +243,7 @@ class AppSettings:
 
     def get(self, key, default=None):
         float_type = [
+            "max_audio_speed_rate",
             "aitrans_temperature",
             "threshold",
             "no_speech_threshold",
@@ -260,7 +258,6 @@ class AppSettings:
             "video_codec",
             "noise_separate_nums",
             "batch_nums",
-            "max_audio_speed_rate",
             "max_video_pts_rate",
             "min_speech_duration_ms",
             "min_speech_duration_ms2",
@@ -283,11 +280,6 @@ class AppSettings:
             "process_max_gpu",
             "llm_ai_type",
             "retry_nums",
-            "adaptive_scene_gap_ms",
-            "adaptive_scene_max_s",
-            "adaptive_safety_pct",
-            "adaptive_hamed_speed_pct", "adaptive_namminh_speed_pct",
-            "adaptive_rewrite_retries",
         ]
         try:
             if key in int_type:

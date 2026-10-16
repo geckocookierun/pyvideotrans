@@ -104,15 +104,16 @@ class AudioMixin:
             return
         if not self.cfg.embed_bgm or not vail_file(self.cfg.instrument) or not vail_file(self.cfg.target_wav):
             return
+        instrument = self._retime_original_track(self.cfg.instrument)
         try:
             self.signal(text=tr("Re-embedded background sounds"))
             vtime = get_audio_time(self.cfg.target_wav)
-            atime = get_audio_time(self.cfg.instrument)
+            atime = get_audio_time(instrument)
             if atime < 1:
                 return
             beishu = math.ceil(vtime / atime)
 
-            instrument_file = self.cfg.instrument
+            instrument_file = instrument
             logger.debug(f'合并背景音 {beishu=},{atime=},{vtime=}')
             if atime + 1000 < vtime:
                 if int(self.cfg.loop_backaudio) == 1:
@@ -163,6 +164,7 @@ class AudioMixin:
                 return
         if not vail_file(underlay):
             return
+        underlay = self._retime_original_track(underlay)
         try:
             self.signal(text=tr("Mixing original audio under dubbing..."))
             vol = float(getattr(self.cfg, 'original_audio_volume', 0.3) or 0.3)
@@ -171,6 +173,13 @@ class AudioMixin:
             logger.debug(f'原声叠加完成 kind={underlay_kind} volume={vol} dur={get_audio_time(self.cfg.target_wav)}ms')
         except Exception as e:
             logger.exception(f'原声叠加失败 {e}', exc_info=True)
+
+    def _retime_original_track(self, filename):
+        from videotrans.task._rate import retime_source_audio
+        timeline = getattr(self, 'sync_timeline', [])
+        if not timeline:
+            return filename
+        return retime_source_audio(filename, timeline, self.cfg.cache_folder)
 
     def _set_volume(self, input_file, output_file, volume=None):
         if volume is None:

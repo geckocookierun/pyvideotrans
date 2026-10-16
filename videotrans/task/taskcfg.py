@@ -207,9 +207,9 @@ class TaskCfgTTS(TaskCfgBase):
 class TaskCfgSTS(TaskCfgBase):
     ######## 字幕翻译相关
     translate_type: int = None  # 字幕翻译渠道
-    third_person_narration: bool = False  # scene narration on (third or first)
-    narration_mode: str = 'none'  # none | third | first | line | adaptive
-    narration_style: str = 'third'  # third | first (when narration on)
+    third_person_narration: bool = False  # third-person scene narration
+    narration_mode: str = 'none'  # none | third
+    narration_style: str = 'third'  # retained for older saved task configs
 
     def __repr__(self):
         _msg = []
