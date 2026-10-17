@@ -1,3 +1,4 @@
+from videotrans.util._subtitle_edit import edited_cue
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QSize, QUrl, QThread, Signal, QSettings
@@ -487,13 +488,7 @@ class EditRecognResultDialog(QDialog,DanspMixin):
         self.save_button.setDisabled(True)
         srt_str_list = []
         for i, data in enumerate(self.display_data):
-            start_time = self.table.item(i, 2)
-            end_time = self.table.item(i, 3)
-            item = self.table.item(i, 5)
-            if not start_time:continue
-            start_raw=ms_to_time_string(ms=int(float(start_time.text().strip())*1000))
-            end_raw=ms_to_time_string(ms=int(float(end_time.text().strip())*1000))
-            text = item.text().strip() if item else data['text'].strip()
+            start_raw, end_raw, text = edited_cue(self.table, i, data, 2, 3, 5)
             if text:
                 srt_str_list.append(f'{len(srt_str_list)+1}\n{start_raw} --> {end_raw}\n{text}')
 

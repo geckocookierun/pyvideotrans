@@ -241,3 +241,16 @@ def test_tiny_cue_without_gap_can_slow_beyond_ten_times(tmp_path):
     assert segment['target_ms']/160 > 10
     assert result[0]['end_time'] <= result[1]['start_time']
     assert abs(audio_ms(obj.target_audio)-tools.get_video_duration(obj.novoice_mp4))<=2
+
+
+def test_original_audio_two_ms_gap_keeps_samples(tmp_path):
+    sr=48000
+    samples=np.full((96,2),.25,dtype='float32')
+    source=tmp_path/'tiny.wav';sf.write(source,samples,sr,subtype='PCM_16')
+    timeline=[dict(source_start=0,source_end=2,start=0,end=1000/30)]
+    output=retime_source_audio(str(source),timeline,str(tmp_path))
+    data,rate=sf.read(output)
+    assert rate==sr
+    assert len(data)==34*48
+    np.testing.assert_allclose(data[:33*48],.25,atol=1/32768)
+    assert not np.any(data[33*48:])

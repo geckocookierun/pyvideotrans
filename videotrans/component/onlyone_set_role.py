@@ -1,3 +1,4 @@
+from videotrans.util._subtitle_edit import edited_cue
 import json
 import time
 from pathlib import Path
@@ -784,21 +785,15 @@ class SpeakerAssignmentDialog(QDialog,DanspMixin):
 
         for row, data in enumerate(self.display_data):
             # 获取当前文本（从表格中获取最新值）
-            start_time = self.table.item(row, 5)
-            if not start_time:continue
-            end_time = self.table.item(row, 6)
-            start_raw=ms_to_time_string(ms=int(float(start_time.text().strip())*1000))
-            end_raw=ms_to_time_string(ms=int(float(end_time.text().strip())*1000))
-
-            text_item = self.table.item(row, 8)
-            text = text_item.text().strip() if text_item else data['text'].strip()
+            start_raw, end_raw, text = edited_cue(self.table, row, data, 5, 6, 8)
             if not text:continue
 
             srt_str_list.append(f'{len(srt_str_list)+1}\n{start_raw} --> {end_raw}\n{text}')
 
             # 角色保存逻辑
             role = data.get('role', '')
-            spk= self.table.item(row, 3).text().strip() or data['spk']
+            speaker_cell = self.table.item(row, 3)
+            spk = speaker_cell.text().strip() if speaker_cell is not None else data.get('spk', '')
             if not role and self.speakers and spk:
                 role = self.speakers.get(spk, '')
 

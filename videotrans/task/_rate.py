@@ -56,7 +56,8 @@ def encode_audio(source, output, factor):
                      '-ar', str(SAMPLE_RATE), '-ac', '2', '-c:a', 'pcm_s16le', str(output)])
     with wave.open(str(output), 'rb') as audio:
         if audio.getparams()[:3] != (2, 2, SAMPLE_RATE) or audio.getnframes() <= 0:
-            raise RuntimeError('Invalid processed PCM audio')
+            raise RuntimeError(f'Invalid processed PCM audio: {output} '
+                               f'(channels/width/rate={audio.getparams()[:3]}, frames={audio.getnframes()})')
         return audio.getnframes()
 
 
@@ -359,7 +360,24 @@ def retime_source_audio(source, timeline, cache_folder):
         tools.runffmpeg(['-y', '-ss', f'{seg["source_start"] / 1000:.9f}',
                          '-i', str(normalized), '-t', f'{source_ms / 1000:.9f}',
                          '-ar', str(SAMPLE_RATE), '-ac', '2', '-c:a', 'pcm_s16le', str(raw)])
-        factor = audio_ms(raw) / target_ms
+        info = sf.info(raw)
+        if info.frames <= 0 or target_ms <= 0:
+            raise RuntimeError(f'Empty original audio interval at segment {i+1}')
+        if min(info.frames / info.samplerate, target_ms / 1000) < .1:
+            # WSOLA/atempo needs a window of samples and can emit nothing for
+            # millisecond gaps. Resample these tiny underlay intervals directly;
+            # this preserves their signal and exact placement instead of dropping it.
+            import numpy as np
+            data, rate = sf.read(raw, dtype='float32', always_2d=True)
+            count = round(target_ms * SAMPLE_RATE / 1000)
+            positions = np.linspace(0, len(data)-1, count)
+            stretched = np.column_stack([
+                np.interp(positions, np.arange(len(data)), data[:, channel])
+                for channel in range(data.shape[1])])
+            sf.write(processed, stretched, SAMPLE_RATE, subtype='PCM_16')
+            clips.append(dict(line=i+1, start_time=start, slot_end=end, processed=str(processed)))
+            continue
+        factor = (info.frames * 1000 / info.samplerate) / target_ms
         for _ in range(4):
             frames = encode_audio(raw, processed, factor)
             if frames <= target_ms * SAMPLE_RATE / 1000:
