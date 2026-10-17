@@ -11,6 +11,28 @@ from videotrans.util.help_misc import get_md5, vail_file
 from videotrans.util.help_srt import get_subtitle_from_srt, delete_punc
 
 
+def prepare_silent_cues(queue):
+    """Keep nonverbal cue intervals while excluding them from paid/network TTS."""
+    spoken = []
+    for item in queue:
+        if any(char.isalnum() for char in item['text']):
+            spoken.append(item)
+            continue
+        import soundfile as sf
+        import numpy as np
+        frames = max(1, int(item['end_time'] - item['start_time']) * 16)
+        with sf.SoundFile(item['filename'], 'w', samplerate=16000,
+                          channels=1, subtype='PCM_16') as audio:
+            block = np.zeros(16000, dtype='float32')
+            while frames:
+                count = min(frames, len(block))
+                audio.write(block[:count])
+                frames -= count
+        item.pop('ref_wav', None)
+        item['silent_cue'] = True
+    return spoken
+
+
 class DubbingMixin:
 
     def dubbing(self) -> None:
@@ -41,12 +63,14 @@ class DubbingMixin:
         self.queue_tts = self._build_tts_queue()
         if not self.queue_tts:
             raise RuntimeError('No subtitle cues available for dubbing')
+        spoken = prepare_silent_cues(self.queue_tts)
         if any(it.get("ref_wav") for it in self.queue_tts):
             self._create_ref_from_vocal()
-        run_tts(
-            queue_tts=self.queue_tts, language=self.cfg.target_language_code,
-            uuid=self.uuid, tts_type=self.cfg.tts_type, is_cuda=self.cfg.is_cuda,
-        )
+        if spoken:
+            run_tts(
+                queue_tts=spoken, language=self.cfg.target_language_code,
+                uuid=self.uuid, tts_type=self.cfg.tts_type, is_cuda=self.cfg.is_cuda,
+            )
         self._cache_tts_outputs()
 
         self._save_srt_target(self.queue_tts, self.cfg.target_sub)
@@ -110,6 +134,8 @@ class DubbingMixin:
             outname = self.cfg.target_dir + f'/segment_audio_{self.cfg.noextname}'
             Path(outname).mkdir(parents=True, exist_ok=True)
         for it in self.queue_tts:
+            if it.get('silent_cue'):
+                continue
             it['text']=it['text'].strip('...').strip('…').strip()
             if self.cfg.fix_punc==2:
                 it['text']=delete_punc(it['text'])

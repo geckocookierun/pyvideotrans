@@ -223,6 +223,12 @@ class SpeedRate:
         elif self.should_videorate:
             raise RuntimeError('Video slowdown requires an input video')
         source_end = self.raw_total_time or max(it['end_time'] for it in self.queue_tts)
+        previous_end = 0
+        for item in self.queue_tts:
+            start, end = int(item['start_time']), int(item['end_time'])
+            if start < previous_end or end <= start or end > source_end:
+                raise RuntimeError(f'Invalid or overlapping source interval at subtitle {item.get("line")}')
+            previous_end = end
         cursor = 0
         clips = []
         for i, item in enumerate(self.queue_tts):
@@ -232,15 +238,17 @@ class SpeedRate:
             if start > cursor:
                 self.timeline.append(dict(source_start=cursor, source_end=start, target_ms=start-cursor))
             tools.set_process(text=f'Align audio {i + 1}/{len(self.queue_tts)}', uuid=self.uuid)
+            next_start = int(self.queue_tts[i + 1]['start_time']) if i + 1 < len(self.queue_tts) else source_end
+            # Use available silence before speeding speech or extending video.
             try:
-                result = self._prepare_audio(item, i, end - start)
+                result = self._prepare_audio(item, i, next_start - start)
             except Exception as exc:
                 raise RuntimeError(f'Audio alignment failed at subtitle {item.get("line", i + 1)}: {exc}') from exc
+            # Consume only the gap actually needed; preserve all remaining silence.
+            end = max(end, min(next_start, start + math.ceil(result['actual_audio_ms'])))
             target = max(end - start, math.ceil(result['actual_audio_ms']))
-            # A physical slowdown ceiling prevents accidentally expanding corrupt
-            # timestamps into hours. Never silently reduce the required duration.
-            if target / (end-start) > float(settings.get('max_video_pts_rate', 10)):
-                raise RuntimeError(f'Subtitle {item.get("line", i + 1)} exceeds the video slowdown limit')
+            # Valid timestamps and measured audio determine the final duration.
+            # With video slowdown enabled there is no arbitrary ratio ceiling.
             segment = dict(source_start=start, source_end=end, target_ms=target, cue=i)
             self.timeline.append(segment)
             clips.append({**item, **result})

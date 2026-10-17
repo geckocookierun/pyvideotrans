@@ -151,7 +151,6 @@ class AppSettings:
             "uvr_models": "spleeter",
 
             "max_audio_speed_rate": 1.25,
-            "max_video_pts_rate": 10,
 
             "threshold": 0.45,
             "no_speech_threshold": 0.6,
@@ -258,7 +257,6 @@ class AppSettings:
             "video_codec",
             "noise_separate_nums",
             "batch_nums",
-            "max_video_pts_rate",
             "min_speech_duration_ms",
             "min_speech_duration_ms2",
             "max_speech_duration_s",

@@ -34,7 +34,6 @@ def queue(path, start=1000, end=2000, line=1):
 @pytest.fixture(autouse=True)
 def config(monkeypatch):
     monkeypatch.setattr(settings, 'max_audio_speed_rate', 1.25)
-    monkeypatch.setattr(settings, 'max_video_pts_rate', 10)
     monkeypatch.setattr(tools, 'set_process', lambda **kwargs: None)
 
 
@@ -50,7 +49,7 @@ def run(tmp_path, cues, *, audio=True, slow=True, fps='25', seconds=4):
 def test_overflow_extends_video_after_audio_limit(tmp_path, audio, slow, expected):
     source = tone(tmp_path/'tts.wav', 1800)
     digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
-    obj, result = run(tmp_path, [queue(source)], audio=audio, slow=slow)
+    obj, result = run(tmp_path, [queue(source), queue(tone(tmp_path/'next.wav',100),2000,2100,2)], audio=audio, slow=slow)
     report = json.loads((obj.folder/'fit_report.json').read_text())
     clip = report['clips'][0]
     assert clip['speed'] == expected
@@ -60,7 +59,7 @@ def test_overflow_extends_video_after_audio_limit(tmp_path, audio, slow, expecte
     assert abs(audio_ms(obj.target_audio)-tools.get_video_duration(obj.novoice_mp4)) <= 1
     assert hashlib.sha256(Path(source).read_bytes()).hexdigest() == digest
     assert obj.timeline[-1]['source_end'] == 4000  # tail retained
-    assert obj.timeline[-1]['end']-obj.timeline[-1]['start'] == 2000
+    assert 1900 <= obj.timeline[-1]['end']-obj.timeline[-1]['start'] < 1940
     samples, sr = sf.read(clip['processed'])
     tail = samples[-int(sr*.08):,0]
     crossings = np.sum((tail[:-1] < 0) & (tail[1:] >= 0))
@@ -73,7 +72,7 @@ def test_audio_only_fits_without_changing_video(tmp_path):
     assert tools.get_video_duration(obj.novoice_mp4) == 4000
     assert not obj.timeline
     assert result[0]['start_time'] == 1000
-    assert result[0]['end_time'] <= 2000
+    assert 2000 < result[0]['end_time'] <= 2200
     assert audio_ms(obj.target_audio) == 4000
 
 
@@ -82,7 +81,7 @@ def test_audio_limit_failure_does_not_publish(tmp_path):
     target = tmp_path/'dub.wav'
     target.write_bytes(b'previous output')
     with pytest.raises(RuntimeError, match='Enable video slowdown'):
-        run(tmp_path, [queue(source)], slow=False)
+        run(tmp_path, [queue(source)], slow=False, seconds=2)
     assert target.read_bytes() == b'previous output'
 
 
@@ -102,7 +101,7 @@ def test_fractional_fps_multiple_cues_has_no_accumulating_drift(tmp_path):
     obj, result = run(tmp_path, cues, fps='30000/1001')
     assert abs(audio_ms(obj.target_audio)-tools.get_video_duration(obj.novoice_mp4)) <= 2
     for a,b in zip(result,result[1:]):
-        assert a['end_time'] < b['start_time']
+        assert a['end_time'] <= b['start_time']
     for item,seg in zip(result,[s for s in obj.timeline if 'cue' in s]):
         assert abs(item['start_time']-seg['start']) <= 1
         assert item['end_time'] <= math.ceil(seg['end'])
@@ -110,7 +109,7 @@ def test_fractional_fps_multiple_cues_has_no_accumulating_drift(tmp_path):
 
 def test_original_track_uses_same_piecewise_map(tmp_path):
     source = tone(tmp_path/'tts.wav', 1800)
-    obj,_ = run(tmp_path,[queue(source)])
+    obj,_ = run(tmp_path,[queue(source),queue(tone(tmp_path/'next.wav',100),2000,2100,2)])
     sr=16000
     samples=np.zeros(4*sr)
     # Event after the elongated scene must move by that scene's added time.
@@ -168,7 +167,7 @@ def test_video_motion_is_slowed_not_just_frozen_at_end(tmp_path):
         "color=c=red:size=160x90:rate=25:duration=4,drawbox=x=0:y=0:w=iw:h=ih:color=blue:t=fill:enable='gte(t,1.5)'",
         '-c:v','libx264',str(src)])
     source=tone(tmp_path/'tts.wav',1800)
-    obj=SpeedRate(queue_tts=[queue(source)],should_audiorate=True,should_videorate=True,
+    obj=SpeedRate(queue_tts=[queue(source),queue(tone(tmp_path/'next.wav',100),2000,2100,2)],should_audiorate=True,should_videorate=True,
         novoice_mp4=str(src),target_audio=str(tmp_path/'dub.wav'),cache_folder=str(tmp_path))
     obj.run()
     for second,expected in [(1.6,'red'),(1.9,'blue')]:
@@ -188,7 +187,7 @@ def test_encoder_failure_after_video_processing_preserves_previous_outputs(tmp_p
     def fail(*args):
         raise RuntimeError('final audio failed')
     monkeypatch.setattr(_rate,'write_timeline_audio',fail)
-    obj=SpeedRate(queue_tts=[queue(source)],should_audiorate=True,should_videorate=True,
+    obj=SpeedRate(queue_tts=[queue(source),queue(tone(tmp_path/'next.wav',100),2000,2100,2)],should_audiorate=True,should_videorate=True,
                   novoice_mp4=src,target_audio=str(target),cache_folder=str(tmp_path))
     with pytest.raises(RuntimeError,match='final audio failed'):
         obj.run()
@@ -219,3 +218,26 @@ def test_concat_rejects_frame_loss_even_when_duration_matches(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match='lost frames'):
         _rate.concat_video_segments([dict(filename=str(tmp_path/'piece.mp4'), duration=1000,
                                          video_frames=30)], tmp_path/'merged.mp4')
+
+
+def test_tiny_cue_uses_gap_before_next_speech(tmp_path):
+    source=tone(tmp_path/'tts.wav',2010)
+    next_audio=tone(tmp_path/'next.wav',500)
+    obj,result=run(tmp_path,[queue(source,1000,1160),queue(next_audio,20680,21680,2)],seconds=23)
+    assert not obj.timeline
+    assert tools.get_video_duration(obj.novoice_mp4)==23000
+    assert result[1]['start_time']==20680
+    report=json.loads((obj.folder/'fit_report.json').read_text())
+    assert report['clips'][0]['speed']==1
+    assert 3000 <= result[0]['end_time'] <= 3050
+
+
+def test_tiny_cue_without_gap_can_slow_beyond_ten_times(tmp_path):
+    source=tone(tmp_path/'tts.wav',2400)
+    next_audio=tone(tmp_path/'next.wav',100)
+    obj,result=run(tmp_path,[queue(source,1000,1160),queue(next_audio,1160,1400,2)],seconds=2)
+    assert obj.timeline
+    segment=next(s for s in obj.timeline if s.get('cue')==0)
+    assert segment['target_ms']/160 > 10
+    assert result[0]['end_time'] <= result[1]['start_time']
+    assert abs(audio_ms(obj.target_audio)-tools.get_video_duration(obj.novoice_mp4))<=2

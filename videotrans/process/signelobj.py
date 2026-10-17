@@ -1,5 +1,7 @@
 import multiprocessing, os
 import time
+import tempfile
+from pathlib import Path
 
 from videotrans.configure.config import app_cfg, settings, logger
 
@@ -26,7 +28,10 @@ def pool_init_worker():
             setattr(sys, _stream, _null_writer)
 
 
-def _task_worker_wrapper(func, kwargs):
+def _task_worker_wrapper(func, kwargs, marker):
+    if not Path(marker).exists():
+        return None, "Task cancelled before execution"
+    Path(marker).write_text(str(os.getpid()), encoding="ascii")
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
     # 这里执行真正的任务
@@ -34,54 +39,76 @@ def _task_worker_wrapper(func, kwargs):
 
 
 class AsyncResultFutureWrapper:
-    def __init__(self, async_result, pool_executor):
+    """Track the actual worker, not just replacement workers in the pool."""
+    def __init__(self, async_result, pool_executor, marker, progress_file=None, idle_timeout=7200):
         self.async_result = async_result
-        self._pool = pool_executor  # 持有对进程池的引用，用于检查健康状态
+        self._pool = pool_executor
+        self.marker = Path(marker)
+        self.progress_file = Path(progress_file) if progress_file else None
+        self.idle_timeout = idle_timeout
+        self.last_progress = time.monotonic()
+        self.progress_stamp = None
+        self.worker_pid = None
+        self.error = None
 
-    def result(self, timeout=None):
-        # 默认总超时 1 小时，或者自定义
-        start_time = time.time()
-        actual_timeout = timeout if timeout is not None else 3600
-
-        while True:
-            # 1. 检查是否已经完成（正常结束或捕获了 Python 异常）
-            if self.async_result.ready():
-                try:
-                    return self.async_result.get(timeout=1)
-                except Exception as e:
-                    return None, f"Subprocess Error: {str(e)}"
-
-            # 2. 检查进程池是否还健康
-            # 如果进程池里所有的工作进程都消失了，或者池被关闭了
-            if not self._is_pool_healthy():
-                return None, "Subprocess crashed hard (Segmentation Fault/OOM)"
-
-            # 3. 检查是否超时
-            if (time.time() - start_time) > actual_timeout:
-                return None, "Task timeout (Possible deadlock in C++ layer)"
-
-            # 4. 检查外部退出信号
-            if app_cfg.exit_soft:
-                return None, "Task interrupted by user"
-
-            # 5. 短暂休眠，防止 CPU 空转
-            time.sleep(0.5)
-
-    def _is_pool_healthy(self):
-        """检查进程池中的工作进程是否还在存活"""
-        try:
-            # Pool 的私有属性 _pool 包含了所有工作进程对象 (Process)
-            # 虽然访问私有属性略有风险，但在 Python 3.10 中这是检测 Pool 健康最直接的方法
-            workers = getattr(self._pool, '_pool', [])
-            if not workers:
-                return False
-            # 只要有一个工作进程是存活的，就认为池还在工作
-            return any(w.is_alive() for w in workers)
-        except:
-            return False
+    def _fail(self, message):
+        self.error = message
+        # Terminate only this task's worker, never other jobs sharing the pool.
+        for worker in getattr(self._pool, '_pool', []):
+            if worker.pid == self.worker_pid and worker.is_alive():
+                worker.terminate()
+                break
+        self.marker.unlink(missing_ok=True)
 
     def done(self):
-        return self.async_result.ready()
+        if self.error:
+            return True
+        if self.async_result.ready():
+            self.marker.unlink(missing_ok=True)
+            return True
+        if self.worker_pid is None:
+            try:
+                self.worker_pid = int(self.marker.read_text())
+                self.last_progress = time.monotonic()
+            except (OSError, ValueError):
+                pass
+        if self.worker_pid is not None:
+            workers = getattr(self._pool, '_pool', [])
+            if not any(w.pid == self.worker_pid and w.is_alive() for w in workers):
+                self._fail('Subprocess exited before returning its result (possible crash/OOM)')
+                return True
+        if self.progress_file:
+            try:
+                stamp = self.progress_file.stat().st_mtime_ns
+                if stamp != self.progress_stamp:
+                    self.progress_stamp = stamp
+                    self.last_progress = time.monotonic()
+            except OSError:
+                pass
+        if time.monotonic() - self.last_progress > self.idle_timeout:
+            self._fail(f'Subprocess made no progress for {self.idle_timeout}s')
+            return True
+        return False
+
+    def cancel(self):
+        self._fail("Task interrupted by user")
+
+    def result(self, timeout=None):
+        started = time.monotonic()
+        while not self.done():
+            if app_cfg.exit_soft:
+                self._fail('Task interrupted by user')
+                break
+            if timeout is not None and time.monotonic()-started > timeout:
+                self._fail('Task wait timed out')
+                break
+            time.sleep(0.1)
+        if self.error:
+            return False, self.error
+        try:
+            return self.async_result.get(timeout=1)
+        except Exception as error:
+            return False, f'Subprocess Error: {error}'
 
 
 # ==========================================
@@ -136,34 +163,40 @@ class GlobalProcessManager:
         return cls._executor_gpu
 
     @classmethod
+    def _submit(cls, executor, func, kwargs):
+        from videotrans.configure.config import TEMP_ROOT
+        folder = Path(TEMP_ROOT, 'process_tasks')
+        folder.mkdir(parents=True, exist_ok=True)
+        fd, marker = tempfile.mkstemp(dir=folder, suffix='.pid')
+        os.close(fd)
+        # Separation emits progress per bounded chunk. Other models retain a
+        # generous limit until they expose comparable progress events.
+        separation = func.__name__ in ('vocal_bgm', 'vocal_bgm_spleeter')
+        if separation and not kwargs.get('logs_file'):
+            kwargs['logs_file'] = marker + '.progress'
+        try:
+            result = executor.apply_async(_task_worker_wrapper, args=(func, kwargs, marker))
+        except Exception:
+            Path(marker).unlink(missing_ok=True)
+            raise
+        return AsyncResultFutureWrapper(result, executor, marker,
+            progress_file=kwargs.get('logs_file'), idle_timeout=900 if separation else 7200)
+
+    @classmethod
     def submit_task_cpu(cls, func, **kwargs):
-        _executor = cls.get_executor_cpu()
-        # 使用 error_callback 记录错误日志
-        async_result = _executor.apply_async(
-            _task_worker_wrapper,
-            args=(func, kwargs),
-            error_callback=lambda e: logger.error(f"CPU进程池回调异常: {e}")
-        )
-        return AsyncResultFutureWrapper(async_result, _executor)
+        return cls._submit(cls.get_executor_cpu(), func, kwargs)
 
     @classmethod
     def submit_task_gpu(cls, func, **kwargs):
-        _executor = cls.get_executor_gpu()
-        async_result = _executor.apply_async(
-            _task_worker_wrapper,
-            args=(func, kwargs),
-            error_callback=lambda e: logger.error(f"GPU进程池回调异常: {e}")
-        )
-
-        return AsyncResultFutureWrapper(async_result, _executor)
+        return cls._submit(cls.get_executor_gpu(), func, kwargs)
 
     @classmethod
     def shutdown(cls):
         if cls._executor_cpu:
-            cls._executor_cpu.close()
+            cls._executor_cpu.terminate()
             cls._executor_cpu.join()
             cls._executor_cpu = None
         if cls._executor_gpu:
-            cls._executor_gpu.close()
+            cls._executor_gpu.terminate()
             cls._executor_gpu.join()
             cls._executor_gpu = None

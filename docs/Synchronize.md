@@ -12,10 +12,12 @@ maximum defaults to **1.25x (+25%)**, for every voice. A saved legacy default of
 50x migrates to 1.25x. The advanced setting accepts multipliers from 1 to 2.
 These are mechanical limits, not guarantees of intelligibility.
 
-For each original cue, measure generated audio, accelerate only as much as
-needed (within the limit), then measure the processed samples again. If it still
-exceeds its interval and video slowdown is enabled, extend that video interval
-to accommodate the actual processed audio. Do not borrow the next cue's gap.
+For each cue, measure generated audio and allow it to occupy the following
+subtitle gap, stopping at the next cue start (or video end). Preserve any unused
+part of the gap. If this interval is insufficient, accelerate within the audio
+limit and measure again. If it still does not fit and video slowdown is enabled,
+extend the video interval to the measured duration. There is no video slowdown
+ratio ceiling; timestamp validity, overlap and output duration checks remain.
 
 | Audio acceleration | Video slowdown | Behavior |
 | --- | --- | --- |
@@ -44,7 +46,7 @@ also use the shared limit; they cannot fall back to changing video.
 - Concatenate speech samples and silence to the final video length. Verify each
   speech clip fits its interval and verify final PCM sample count before publishing.
 - Stop on missing audio, invalid/overlapping cue timing, encoder failure,
-  unacceptable duration mismatch or the video slowdown ceiling (default 10x).
+  unacceptable duration mismatch. Video slowdown has no ratio ceiling; extreme stretching can look nearly frozen.
   Never silently skip failed segments. No output is published on validation failure.
 - Save `sync-*/fit_report.json` with per-cue speed/duration and the video time map.
 
@@ -67,3 +69,23 @@ frame rates, source-track timing, gaps, failure handling and the speed ceiling.
 `tests/test_shared_narration_pipeline.py` checks mode migration, shared alignment
 routing and narration content retention. These tests do not validate translation
 accuracy or prove that every voice remains intelligible at the configured speed.
+
+
+## Long-video source separation
+
+Source separation now reads 60-second audio chunks with 2 seconds of context.
+Only each chunk's central source interval is retained, so context never adds
+time to the output. End padding protects the final samples from model frame
+rounding. Vocals and background must both have the exact input sample count.
+
+Completed chunks are stored under `tmp/separation_cache`, keyed by input audio
+content, model files and chunk parameters. Recreated task directories can reuse
+these checkpoints. This cache consumes disk space and can be removed when no
+job needs to resume; do not remove it during an active separation.
+
+Subprocess monitoring follows the PID assigned to each task. A replacement
+worker does not count as completion of a crashed task. Separation times out
+after 15 minutes without a chunk progress update; other subprocess jobs have
+a two-hour inactivity limit. Cancellation terminates only the assigned worker.
+App shutdown terminates pools rather than waiting forever for lost results.
+These changes take effect after restarting the application.

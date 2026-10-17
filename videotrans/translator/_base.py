@@ -199,7 +199,7 @@ class BaseTrans(BaseCon):
 
     def _get_key(self, it) -> str:
         it=serial(it)
-        return get_md5(f'{self.translate_type}-{self.api_url}-{self.aisendsrt}-{self.model_name}-{self.source_code}-{self.target_code}-{it}')
+        return get_md5(f'{self.translate_type}-{self.api_url}-{self.aisendsrt}-{self.model_name}-{self.source_code}-{self.target_code}-{getattr(self, "prompt", "")}-{it}')
     
     def _set_context(self,target_code=None):
         if not self.text_list: return '' # LLM  error correction
@@ -208,6 +208,16 @@ class BaseTrans(BaseCon):
         if Path(lang_prompt_file).exists():
             lang_prompt=Path(lang_prompt_file).read_text(encoding='utf-8')
         prompt = get_prompt(ainame=self.ainame,aisendsrt=self.aisendsrt).replace('{lang}',target_code or self.target_code).replace('{lang_prompt}',lang_prompt)
+        if self.aisendsrt:
+            prompt += (
+                '\nRead adjacent cues as continuous dialogue. Translate short fragments and '
+                'grammatical particles using the surrounding sentence, not in isolation. '
+                'Preserve every cue and timestamp. You may distribute natural translated '
+                'wording across related cues of the same utterance, but never move meaning '
+                'between speakers or omit meaning. Do not replace spoken content with '
+                'ellipsis (...) merely to fill a cue. When context is insufficient, do not '
+                'invent dialogue or assume a speaker change.\n'
+            )
         if not settings.get('aitrans_context'):
             return prompt.replace('{context_info}','')
             

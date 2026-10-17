@@ -258,7 +258,8 @@ class BaseCon:
 
             _timeout=0
             while not future.done():
-                if app_cfg.exit_soft:
+                if self._exit():
+                    future.cancel()
                     return None
                 # faster-whisper 在工作完成后退出时，偶发可能静默崩溃，主进程无法捕获，导致永久等待
                 # 在退出前预先将识别结果保存到 subtitle_srt 文件中，再返回，此处通过检测文件存在确保崩溃后仍能继续运行
