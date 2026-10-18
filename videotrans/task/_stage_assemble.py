@@ -253,10 +253,14 @@ class AssembleMixin:
         tmp_target_mp4 = self.cfg.cache_folder + f"/laste_target-{_run_tag}{_video_output_ext}"
         self.signal(text=tr("Video + Subtitles + Dubbing in merge"))
 
+        compose_stop = threading.Event()
+        compose_monitor = None
         try:
             protxt = self.cfg.cache_folder + f"/compose{time.time()}.txt"
             protxt_basename = os.path.basename(protxt)
-            threading.Thread(target=self._hebing_pro, args=(protxt,), daemon=True).start()
+            compose_monitor = threading.Thread(target=self._hebing_pro,
+                args=(protxt, duration_ms, None, compose_stop), daemon=True)
+            compose_monitor.start()
 
             novoice_mp4_basename = os.path.basename(self.cfg.novoice_mp4)
             target_m4a_basename = os.path.basename(target_m4a)
@@ -381,6 +385,10 @@ class AssembleMixin:
                     tr('Error in embedding the final step of the subtitle dubbing') + tip
                 ) from e
             raise VideoTransError(tr('Error in embedding the final step of the subtitle dubbing')+err) from e
+        finally:
+            compose_stop.set()
+            if compose_monitor is not None:
+                compose_monitor.join(timeout=2)
 
         if Path(tmp_target_mp4).exists():
             try:
@@ -399,8 +407,7 @@ class AssembleMixin:
                         raise VideoTransError(tr('Translation successful but transfer failed.', tmp_target_mp4)) from e
 
         if self.cfg.targetdir_mp4 and Path(self.cfg.targetdir_mp4).exists():
-            self._apply_embed_logo(self.cfg.targetdir_mp4)
-            self._apply_floating_channel(self.cfg.targetdir_mp4)
+            self._apply_branding(self.cfg.targetdir_mp4)
 
         while output_source_output is not True:
             if app_cfg.exit_soft:return
@@ -415,14 +422,10 @@ class AssembleMixin:
             s = s.replace(a, b)
         return s
 
-    def _apply_floating_channel(self, mp4_path: str) -> None:
-        """Slow, faint channel name drifting around the frame (optional)."""
-        if not getattr(self.cfg, 'floating_channel', False):
-            return
+    def _floating_filter(self):
         name = (getattr(self.cfg, 'channel_name', None) or '').strip()
         if not name:
-            logger.warning('floating_channel enabled but channel name empty; skip')
-            return
+            return None
         text = self._escape_drawtext(name)
         # Near-invisible: only noticeable if you look for it; motion is very slow
         # so viewers following the story rarely catch it drifting.
@@ -435,40 +438,9 @@ class AssembleMixin:
             f":x='(w-text_w)/2+(w*0.28)*sin(2*PI*t/180)'"
             f":y='(h-text_h)/2+(h*0.24)*cos(2*PI*t/220)'"
         )
-        out = Path(self.cfg.cache_folder) / f'channel_wm_out{Path(mp4_path).suffix}'
-        self.signal(text=tr('Embedding floating channel name...'))
-        codec = getattr(self, 'video_codec_num', None) or 264
-        cmd = [
-            '-y',
-            '-i', os.path.normpath(mp4_path),
-            '-vf', vf,
-            '-c:v', f'libx{codec}',
-            '-crf', f'{settings.get("crf", 23)}',
-            '-preset', f'{settings.get("preset", "fast")}',
-            '-c:a', 'copy',
-            '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart',
-            str(out),
-        ]
-        try:
-            runffmpeg(cmd, cmd_dir=self.cfg.cache_folder, force_cpu=True)
-            if out.exists() and out.stat().st_size > 0:
-                shutil.move(str(out), mp4_path)
-            else:
-                logger.warning('Floating channel watermark produced empty file; keep original')
-                out.unlink(missing_ok=True)
-        except Exception as e:
-            logger.exception(f'Floating channel watermark failed, keep original: {e}', exc_info=True)
-            out.unlink(missing_ok=True)
+        return vf
 
-    def _apply_embed_logo(self, mp4_path: str) -> None:
-        """Overlay logo/watermark on the final translated video (optional)."""
-        if not getattr(self.cfg, 'embed_logo', False):
-            return
-        png = getattr(self.cfg, 'logo_path', None)
-        if not png or not Path(png).is_file():
-            logger.warning('embed_logo enabled but logo file missing; skip')
-            return
+    def _logo_filter(self):
         try:
             margin = max(0, int(getattr(self.cfg, 'logo_margin', 10) or 10))
         except (TypeError, ValueError):
@@ -493,33 +465,69 @@ class AssembleMixin:
             f"(W-w)/2:(H-h)/2",  # center
         ]
         position = positions[pos if 0 <= pos < len(positions) else 0]
-        out = Path(self.cfg.cache_folder) / f'logo_out{Path(mp4_path).suffix}'
-        self.signal(text=tr('Embedding logo watermark...'))
+        return f"[1:v]scale={w}:{h}[logo];[0:v][logo]overlay={position}[branded]"
+
+    def _apply_embed_logo(self, mp4_path):
+        self._apply_branding(mp4_path, floating=False)
+
+    def _apply_floating_channel(self, mp4_path):
+        self._apply_branding(mp4_path, logo=False)
+
+    def _apply_branding(self, mp4_path, logo=True, floating=True):
+        """Apply both overlays in one pass; publish only a verified output."""
+        png = getattr(self.cfg, 'logo_path', '')
+        logo = logo and getattr(self.cfg, 'embed_logo', False)
+        if logo and (not png or not Path(png).is_file()):
+            raise VideoTransError('Logo file is missing')
+        vf = self._floating_filter() if floating and getattr(self.cfg, 'floating_channel', False) else None
+        if not logo and not vf:
+            return
+        out = Path(self.cfg.cache_folder) / f'branding-{time.time_ns()}{Path(mp4_path).suffix}'
+        progress = out.with_suffix('.progress')
+        duration = get_video_duration(mp4_path)
+        inputs = ['-i', os.path.normpath(mp4_path)]
+        if logo:
+            inputs += ['-i', os.path.normpath(str(png))]
+            graph = self._logo_filter()
+            graph += f';[branded]{vf}[v_out]' if vf else ';[branded]null[v_out]'
+        else:
+            graph = f'[0:v]{vf}[v_out]'
+        base = ['-y', '-progress', str(progress)] + inputs + [
+            '-filter_complex', graph, '-map', '[v_out]', '-map', '0:a?',
+            '-map', '0:s?', '-c:a', 'copy', '-c:s', 'copy', '-pix_fmt', 'yuv420p']
         codec = getattr(self, 'video_codec_num', None) or 264
-        cmd = [
-            '-y',
-            '-i', os.path.normpath(mp4_path),
-            '-i', os.path.normpath(str(png)),
-            '-filter_complex',
-            f"[1:v]scale={w}:{h}[overlay];[0:v][overlay]overlay={position}",
-            '-c:v', f'libx{codec}',
-            '-crf', f'{settings.get("crf", 23)}',
-            '-preset', f'{settings.get("preset", "fast")}',
-            '-c:a', 'copy',
-            '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart',
-            str(out),
-        ]
+        cpu = ['-c:v', f'libx{codec}', '-crf', str(settings.get('crf', 23)),
+               '-preset', settings.get('preset', 'medium')]
+        encoder = cpu
+        # VideoToolbox accepts software-filtered frames; use the same quality
+        # mapping as the main compose pass. Other platforms retain CPU fallback.
+        if platform.system() == 'Darwin' and not settings.get('force_lib'):
+            _, _, hardware, quality = self._get_hard_cfg(codec=str(codec))
+            if hardware.endswith('_videotoolbox'):
+                encoder = ['-c:v', hardware] + quality
+        stop = threading.Event()
+        monitor = threading.Thread(target=self._hebing_pro,
+            args=(str(progress), duration, 'Logo / channel watermark', stop), daemon=True)
+        monitor.start()
         try:
-            runffmpeg(cmd, cmd_dir=self.cfg.cache_folder, force_cpu=True)
-            if out.exists() and out.stat().st_size > 0:
-                shutil.move(str(out), mp4_path)
-            else:
-                logger.warning('Logo overlay produced empty file; keep original')
-                out.unlink(missing_ok=True)
-        except Exception as e:
-            logger.exception(f'Logo overlay failed, keep original: {e}', exc_info=True)
+            try:
+                runffmpeg(base + encoder + ['-movflags', '+faststart', str(out)],
+                          cmd_dir=self.cfg.cache_folder, force_cpu=True)
+            except Exception:
+                if encoder == cpu or self._exit():
+                    raise
+                logger.warning('Watermark hardware encoding failed; retrying with CPU')
+                progress.unlink(missing_ok=True)
+                runffmpeg(base + cpu + ['-movflags', '+faststart', str(out)],
+                          cmd_dir=self.cfg.cache_folder, force_cpu=True)
+            if not out.is_file() or abs(get_video_duration(str(out)) - duration) > 100:
+                raise VideoTransError('Watermark output duration mismatch')
+            shutil.move(str(out), mp4_path)
+        finally:
+            stop.set()
+            monitor.join(timeout=2)
             out.unlink(missing_ok=True)
+            progress.unlink(missing_ok=True)
 
     def _get_origin_audio(self, output,duration_ms=0):
         if self.video_info.get('streams_audio', 0) == 0:
@@ -537,25 +545,22 @@ class AssembleMixin:
         cmd.extend(['-c:a', 'aac', '-b:a', '128k',output])
         return runffmpeg(cmd)
 
-    def _hebing_pro(self, protxt) -> None:
-        while 1:
-            if app_cfg.exit_soft or self.hasend or self.uuid in app_cfg.stoped_uuid_set: return
-            content = read_last_n_lines(protxt)
-            if not content:
-                time.sleep(0.5)
-                continue
-
-            if content[-1] == 'progress=end':
+    def _hebing_pro(self, protxt, duration_ms=None, label=None, stop=None) -> None:
+        from videotrans.util._render_progress import progress_message
+        if duration_ms is None:
+            duration_ms = get_video_duration(self.cfg.novoice_mp4)
+        label = label or tr('kaishihebing')
+        while not (stop and stop.is_set()):
+            if app_cfg.exit_soft or self.hasend or self.uuid in app_cfg.stoped_uuid_set:
                 return
-            idx = len(content) - 1
-            end_time = "00:00:00"
-            while idx > 0:
-                if content[idx].startswith('out_time='):
-                    end_time = content[idx].split('=')[1].strip()
-                    break
-                idx -= 1
-            self.signal(text=tr('kaishihebing') + f' {end_time}')
-            time.sleep(0.5)
+            content = read_last_n_lines(protxt)
+            self.signal(text=progress_message(label, content or [], duration_ms))
+            if content and content[-1].strip() == 'progress=end':
+                return
+            if stop:
+                stop.wait(1)
+            else:
+                time.sleep(1)
 
     def _get_hard_cfg(self, subtitles_file=None, codec=None):
         os_name = platform.system()

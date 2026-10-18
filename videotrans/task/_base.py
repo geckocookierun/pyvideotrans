@@ -236,38 +236,68 @@ class BaseTask(BaseCon):
 
 
     async def _edgetts_single(self, target_audio, kwargs):
+        import asyncio
+        import tempfile
+        import aiohttp
         from edge_tts import Communicate
+        from edge_tts.exceptions import NoAudioReceived
         from io import BytesIO
+        from pydub import AudioSegment
         from videotrans.configure.excepts import DubbingSrtError
 
-        useproxy_initial = None if not self.proxy_str or Path(
+        if not any(char.isalnum() for char in kwargs.get('text', '')):
+            raise DubbingSrtError('Text contains no letters or numbers to speak')
+        initial_proxy = None if not self.proxy_str or Path(
             f'{ROOT_DIR}/edgetts-noproxy.txt').exists() else self.proxy_str
-        proxies_to_try = [useproxy_initial]
-        if useproxy_initial is not None:
-            proxies_to_try.append(None)
-
-        for proxy in proxies_to_try:
+        # One global attempt budget, including the direct-connection fallback.
+        proxies = [initial_proxy, None, None]
+        last_error = None
+        for attempt, proxy in enumerate(proxies, 1):
+            if self._exit():
+                raise DubbingSrtError('TTS cancelled')
             try:
-                audio_buffer = BytesIO()
-                communicate_task = Communicate(
-                    text=kwargs['text'],
-                    voice=kwargs['voice'],
-                    rate=kwargs['rate'],
-                    volume=kwargs['volume'],
-                    proxy=proxy,
-                    pitch=kwargs['pitch']
-                )
-                idx = 0
-                async for chunk in communicate_task.stream():
-                    if chunk["type"] == "audio":
-                        audio_buffer.write(chunk["data"])
-                        self.signal(text=f'{idx} segment')
-                        idx += 1
-                audio_buffer.seek(0)
-                from pydub import AudioSegment
-                au = AudioSegment.from_file(audio_buffer, format="mp3")
-                au.export(target_audio, format='mp3')
+                async def receive():
+                    buffer = BytesIO()
+                    communicate = Communicate(text=kwargs['text'], voice=kwargs['voice'],
+                        rate=kwargs['rate'], volume=kwargs['volume'], pitch=kwargs['pitch'], proxy=proxy)
+                    count = 0
+                    async for chunk in communicate.stream():
+                        if self._exit():
+                            raise DubbingSrtError('TTS cancelled')
+                        if chunk['type'] == 'audio':
+                            buffer.write(chunk['data'])
+                            count += 1
+                            self.signal(text=f'Edge TTS attempt {attempt}/3: {count} audio chunks')
+                    if not buffer.tell():
+                        raise NoAudioReceived('Edge returned no audio')
+                    return buffer.getvalue()
+                data = await asyncio.wait_for(receive(), timeout=300)
+                # Validate without re-encoding the MP3 returned by Edge.
+                audio = AudioSegment.from_file(BytesIO(data), format='mp3')
+                if not len(audio):
+                    raise NoAudioReceived('Edge returned empty decoded audio')
+                target = Path(target_audio)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, suffix='.mp3', delete=False) as out:
+                    temporary = Path(out.name)
+                    out.write(data)
+                try:
+                    temporary.replace(target)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 return
-            except Exception as e:
-                raise DubbingSrtError(f'edge-tts error:{target_audio=}') from e
-        raise DubbingSrtError(f'Dubbing error')
+            except (NoAudioReceived, aiohttp.ClientError, asyncio.TimeoutError) as error:
+                last_error = error
+                logger.warning('Edge TXT TTS attempt %s/3 failed: %s', attempt, type(error).__name__)
+                if attempt < 3:
+                    self.signal(text=f'Edge TTS: {type(error).__name__}; retry {attempt + 1}/3')
+                    await asyncio.sleep(2 * attempt)
+            except DubbingSrtError:
+                raise
+            except Exception as error:
+                raise DubbingSrtError(f'Edge TTS failed ({type(error).__name__}): {error}') from error
+        raise DubbingSrtError(
+            f'Edge TTS failed after 3 attempts: {type(last_error).__name__}. '
+            f'Voice={kwargs["voice"]}, text length={len(kwargs["text"])}. '
+            'No valid audio was returned; existing output was not replaced.'
+        ) from last_error
