@@ -19,7 +19,18 @@ class TranslateMixin:
         self.signal(text=tr('starttrans'))
 
         requested_mode = getattr(self.cfg, 'narration_mode', None)
-        if vail_file(self.cfg.target_sub):
+        reuse_target = vail_file(self.cfg.target_sub)
+        if reuse_target and requested_mode == 'third':
+            from videotrans.translator._language_guard import validate_narration_language
+            existing = get_subtitle_from_srt(self.cfg.target_sub, is_file=True)
+            try:
+                validate_narration_language(
+                    [item['text'] for item in existing],
+                    self.cfg.source_language_code, self.cfg.target_language_code)
+            except ValueError as exc:
+                logger.warning('Rebuilding invalid narration subtitles using scene cache: %s', exc)
+                reuse_target = False
+        if reuse_target:
             self.signal(
                 text=Path(self.cfg.target_sub).read_text(encoding="utf-8", errors="ignore"),
                 type='replace_subtitle'

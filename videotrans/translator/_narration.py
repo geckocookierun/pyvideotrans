@@ -529,8 +529,9 @@ def narration_prompt(budget, source_lang, target_lang):
     )
 
 
-def _scene_narration(model, source_text, translate_type):
+def _scene_narration(model, source_text, translate_type, source_code="", target_code=""):
     """Checkpoint validated scene text independently of per-run media caches."""
+    from videotrans.translator._language_guard import validate_narration_language
     identity = dict(version=1, channel=translate_type, prompt=model.prompt, source=source_text)
     for name in ('api_url', 'model_name', 'temperature', 'max_tokens',
                  'reasoning_effort', 'extra_body'):
@@ -541,10 +542,32 @@ def _scene_narration(model, source_text, translate_type):
     if use_cache and cache.is_file():
         lines = clean_narration_lines(cache.read_text(encoding='utf-8'))
         if lines:
-            return lines
-    lines = clean_narration_lines(model._item_task(source_text) or '')
-    if not lines:
-        raise RuntimeError(tr("Third-person narration returned empty text for a scene"))
+            try:
+                validate_narration_language(lines, source_code, target_code)
+            except ValueError as exc:
+                logger.warning('Ignoring invalid narration scene cache: %s', exc)
+            else:
+                return lines
+    original_prompt = model.prompt
+    try:
+        for attempt in range(2):
+            model.prompt = original_prompt + (
+                f"\nTranslate every sentence into {target_code}. Do not copy source-language "
+                "sentences. Use third-person references instead of addressing the viewer."
+                if target_code else '')
+            if attempt:
+                model.prompt += "\nThe previous response used the wrong language. Correct this scene only."
+            lines = clean_narration_lines(model._item_task(source_text) or '')
+            if not lines:
+                raise RuntimeError(tr("Third-person narration returned empty text for a scene"))
+            try:
+                validate_narration_language(lines, source_code, target_code)
+                break
+            except ValueError:
+                if attempt:
+                    raise
+    finally:
+        model.prompt = original_prompt
     if use_cache:
         cache.parent.mkdir(parents=True, exist_ok=True)
         # Atomic publication prevents interrupted writes becoming valid checkpoints.
@@ -592,7 +615,7 @@ def run_third_person_narration(*, text_list, translate_type, source_code='', tar
         budget = compute_length_budget(source_lines, window_s, spoken_s, source_lang, target_lang,
                                        sec_per_tgt=pace['sec_per_unit'], tgt_unit=pace['unit'])
         model.prompt = narration_prompt(budget, source_lang, target_lang)
-        new_lines = _scene_narration(model, '\n'.join(source_lines), translate_type)
+        new_lines = _scene_narration(model, '\n'.join(source_lines), translate_type, source_code, target_code)
         # Keep every returned word even when the estimated budget is exceeded.
         for a, b, text in build_timed_cues(new_lines, times[lo][0], times[hi][1],
                                          target_lang, pace['sec_per_unit']):

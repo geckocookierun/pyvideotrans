@@ -63,6 +63,11 @@ class DubbingMixin:
         self.queue_tts = self._build_tts_queue()
         if not self.queue_tts:
             raise RuntimeError('No subtitle cues available for dubbing')
+        if getattr(self.cfg, 'narration_mode', None) == 'third':
+            from videotrans.translator._language_guard import validate_narration_language
+            validate_narration_language(
+                [item['text'] for item in self.queue_tts],
+                self.cfg.source_language_code, self.cfg.target_language_code)
         spoken = prepare_silent_cues(self.queue_tts)
         if any(it.get("ref_wav") for it in self.queue_tts):
             self._create_ref_from_vocal()
