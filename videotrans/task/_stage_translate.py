@@ -20,16 +20,17 @@ class TranslateMixin:
 
         requested_mode = getattr(self.cfg, 'narration_mode', None)
         reuse_target = vail_file(self.cfg.target_sub)
-        if reuse_target and requested_mode == 'third':
-            from videotrans.translator._language_guard import validate_narration_language
+        if reuse_target:
+            from videotrans.translator._language_guard import incomplete_lines, translation_failure
             existing = get_subtitle_from_srt(self.cfg.target_sub, is_file=True)
-            try:
-                validate_narration_language(
-                    [item['text'] for item in existing],
-                    self.cfg.source_language_code, self.cfg.target_language_code)
-            except ValueError as exc:
-                logger.warning('Rebuilding invalid narration subtitles using scene cache: %s', exc)
-                reuse_target = False
+            texts = [item['text'] for item in existing]
+            if incomplete_lines(texts, self.cfg.source_language_code, self.cfg.target_language_code):
+                if requested_mode == 'third':
+                    logger.warning('Rebuilding invalid narration subtitles using scene cache')
+                    reuse_target = False
+                else:
+                    raise translation_failure(
+                        texts, self.cfg.source_language_code, self.cfg.target_language_code)
         if reuse_target:
             self.signal(
                 text=Path(self.cfg.target_sub).read_text(encoding="utf-8", errors="ignore"),
@@ -68,6 +69,12 @@ class TranslateMixin:
         # Narration rebuilds timestamps; basic translation keeps source cue timing.
         if not use_scene_narration:
             target_srt = self.check_target_sub(rawsrt, target_srt)
+        from videotrans.translator._language_guard import translation_failure
+        failure = translation_failure(
+            [item.get('text', '') for item in target_srt],
+            self.cfg.source_language_code, self.cfg.target_language_code)
+        if failure:
+            raise failure
         # 删除原字幕标点
         if self.cfg.fix_punc==2:
             for it in rawsrt:

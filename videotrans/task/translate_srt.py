@@ -60,6 +60,12 @@ class TranslateSrt(BaseTask):
 
         for it in raw_subtitles:
             it['text']=it['text'].strip().strip('...').strip('…').strip()
+        from videotrans.translator._language_guard import translation_failure
+        failure = translation_failure(
+            [it['text'] for it in raw_subtitles],
+            self.cfg.source_language_code, self.cfg.target_language_code)
+        if failure:
+            raise failure
 
         # 单语字幕
         if self.out_format == 0:

@@ -86,8 +86,7 @@ class Worker(QThread):
 
             if trk.should_trans:
                 app_cfg.onlyone_trans = True
-                if not vail_file(trk.cfg.target_sub):
-                    trk.trans()
+                trk.trans()
 
             if self._exit(): return
 
