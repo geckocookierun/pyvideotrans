@@ -119,6 +119,10 @@ class BaseTask(BaseCon):
         target_len = len(target_srt_list)
         if source_len == target_len:
             logger.debug(f'原始语言字幕和目标语言字幕行数一致，均为 {source_len=}')
+            for src, dst in zip(source_srt_list, target_srt_list):
+                for key in ('start_time', 'end_time', 'startraw', 'endraw', 'time'):
+                    if key in src:
+                        dst[key] = src[key]
             return target_srt_list
 
         logger.warning(f'翻译结果行数{target_len}，原始字幕行数{source_len}，不一致,根据原始字幕时间轴获取对应目标字幕文本')

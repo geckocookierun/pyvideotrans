@@ -67,16 +67,13 @@ class WinActionBaseMiscMixin:
             hasattr(m, 'cover_source_hardsub') and m.cover_source_hardsub.isChecked()
         )
         try:
-            from videotrans.task._stage_assemble import (
-                _normalize_cover_hardsub_pct,
-                _format_cover_hardsub_pct,
-            )
-            raw = m.cover_hardsub_pct.text() if hasattr(m, 'cover_hardsub_pct') else 0.14
-            data['cover_source_hardsub_pct'] = _normalize_cover_hardsub_pct(raw)
-            if hasattr(m, 'cover_hardsub_pct'):
-                m.cover_hardsub_pct.setText(_format_cover_hardsub_pct(data['cover_source_hardsub_pct']))
+            from videotrans.component.cover_hardsub_pos import cover_box_from_window
+            data.update(cover_box_from_window(m))
         except (TypeError, ValueError):
             data['cover_source_hardsub_pct'] = 0.14
+            data['cover_hardsub_x'] = 0.0
+            data['cover_hardsub_y'] = -1.0
+            data['cover_hardsub_w'] = 1.0
         data['embed_logo'] = bool(hasattr(m, 'embed_logo') and m.embed_logo.isChecked())
         data['logo_path'] = m.logo_path.text().strip() if hasattr(m, 'logo_path') else ''
         data['logo_pos'] = m.logo_pos.currentIndex() if hasattr(m, 'logo_pos') else 0

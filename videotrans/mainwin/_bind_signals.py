@@ -43,6 +43,12 @@ class BindSignalsMixin:
         self.action_biaozhun.triggered.connect(self.win_action.set_biaozhun)
         self.action_tiquzimu.triggered.connect(self.win_action.set_tiquzimu)
         self.set_ass.clicked.connect(lambda: get_win('set_ass'))
+        if hasattr(self, 'cover_hardsub_pos_btn'):
+            from videotrans.component.cover_hardsub_pos import open_cover_hardsub_dialog
+            self.cover_hardsub_pos_btn.clicked.connect(lambda: open_cover_hardsub_dialog(self))
+            self.cover_source_hardsub.toggled.connect(
+                lambda on: open_cover_hardsub_dialog(self) if on else None
+            )
         self.import_subtitle.clicked.connect(lambda: self.win_action.import_srtfile('spoken'))
         self.import_subtitle_target.clicked.connect(lambda: self.win_action.import_srtfile('target'))
 

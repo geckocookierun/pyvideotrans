@@ -33,7 +33,7 @@ def tempo_filter(factor):
 
 
 def audio_ms(filename):
-    info = sf.info(filename)
+    info = sf.info(str(filename))
     if info.frames <= 0 or info.samplerate <= 0:
         raise RuntimeError(f'Empty audio: {filename}')
     return math.ceil(info.frames * 1000 / info.samplerate)
@@ -240,14 +240,20 @@ class SpeedRate:
                 self.timeline.append(dict(source_start=cursor, source_end=start, target_ms=start-cursor))
             tools.set_process(text=f'Align audio {i + 1}/{len(self.queue_tts)}', uuid=self.uuid)
             next_start = int(self.queue_tts[i + 1]['start_time']) if i + 1 < len(self.queue_tts) else source_end
-            # Use available silence before speeding speech or extending video.
+            cue_ms = end - start
+            # Slowdown holds this scene until the line finishes. Without it, spare
+            # silence before the next line can absorb the speech.
+            slot = cue_ms if self.should_videorate else max(1, next_start - start)
             try:
-                result = self._prepare_audio(item, i, next_start - start)
+                result = self._prepare_audio(item, i, slot)
             except Exception as exc:
                 raise RuntimeError(f'Audio alignment failed at subtitle {item.get("line", i + 1)}: {exc}') from exc
-            # Consume only the gap actually needed; preserve all remaining silence.
-            end = max(end, min(next_start, start + math.ceil(result['actual_audio_ms'])))
-            target = max(end - start, math.ceil(result['actual_audio_ms']))
+            actual = math.ceil(result['actual_audio_ms'])
+            if self.should_videorate:
+                target = max(cue_ms, actual)
+            else:
+                end = max(end, min(next_start, start + actual))
+                target = max(end - start, actual)
             # Valid timestamps and measured audio determine the final duration.
             # With video slowdown enabled there is no arbitrary ratio ceiling.
             segment = dict(source_start=start, source_end=end, target_ms=target, cue=i)
@@ -360,7 +366,7 @@ def retime_source_audio(source, timeline, cache_folder):
         tools.runffmpeg(['-y', '-ss', f'{seg["source_start"] / 1000:.9f}',
                          '-i', str(normalized), '-t', f'{source_ms / 1000:.9f}',
                          '-ar', str(SAMPLE_RATE), '-ac', '2', '-c:a', 'pcm_s16le', str(raw)])
-        info = sf.info(raw)
+        info = sf.info(str(raw))
         if info.frames <= 0 or target_ms <= 0:
             raise RuntimeError(f'Empty original audio interval at segment {i+1}')
         if min(info.frames / info.samplerate, target_ms / 1000) < .1:
@@ -368,13 +374,13 @@ def retime_source_audio(source, timeline, cache_folder):
             # millisecond gaps. Resample these tiny underlay intervals directly;
             # this preserves their signal and exact placement instead of dropping it.
             import numpy as np
-            data, rate = sf.read(raw, dtype='float32', always_2d=True)
+            data, rate = sf.read(str(raw), dtype='float32', always_2d=True)
             count = round(target_ms * SAMPLE_RATE / 1000)
             positions = np.linspace(0, len(data)-1, count)
             stretched = np.column_stack([
                 np.interp(positions, np.arange(len(data)), data[:, channel])
                 for channel in range(data.shape[1])])
-            sf.write(processed, stretched, SAMPLE_RATE, subtype='PCM_16')
+            sf.write(str(processed), stretched, SAMPLE_RATE, subtype='PCM_16')
             clips.append(dict(line=i+1, start_time=start, slot_end=end, processed=str(processed)))
             continue
         factor = (info.frames * 1000 / info.samplerate) / target_ms

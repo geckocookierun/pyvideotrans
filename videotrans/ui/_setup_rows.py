@@ -221,7 +221,7 @@ def _create_alignment_row(ui, parent):
     ui.voice_autorate.setObjectName("voice_autorate")
 
     ui.video_autorate = QtWidgets.QCheckBox(parent)
-    ui.video_autorate.setObjectName("videoe_autorate")
+    ui.video_autorate.setObjectName("video_autorate")
 
     ui.remove_silent_mid = QtWidgets.QCheckBox()
     ui.remove_silent_mid.setObjectName("remove_silent_mid")

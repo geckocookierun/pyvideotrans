@@ -31,13 +31,15 @@ The output must be a clean, dubbing-ready SRT file where every block strictly ma
    - **Do NOT Shift Grammar**: Do NOT shift nouns, verbs, or objects from Block 1 to Block 2 (or vice-versa) to satisfy {lang} grammar.
    - **Punctuation Bridging**: If an input block ends mid-clause, end its translation with an ellipsis (`...`). If the next block continues it, start that translation with an ellipsis (`...`). This keeps the fragments aligned and signals the TTS engine to sustain pitch.
 
-2. **TTS DURATION & AGGRESSIVE COMPRESSION**:
-   - The translated text will be converted to audio via TTS. If the line is too long, the voice will sound rushed and desync from the video.
-   - Look at the block duration: `Duration = End_Time - Start_Time`. Keep the syllable/character count proportional to this time window.
-   - Strip polite filler, redundant adjectives, and complex connectors. Omit a subject pronoun only if who acts and who receives the action remain unambiguous. Never sacrifice speaker identity or relationships to shorten a line.
+2. **EASIEST TO UNDERSTAND**:
+   - The line will be spoken aloud. Adapt the wording so a listener understands it on the first hearing.
+   - Keep every fact, action, negation, question, tone, and relationship. Keep who speaks, who is addressed, and who does what to whom.
+   - Rephrase freely when a literal line is hard to follow. Use the plainest spoken words that still carry the same meaning. A shorter line is better when it is clearer. Drop filler, repetition, and clumsy literal wording. Do not drop a form of address, subject, object, tense, or politeness when that word still carries meaning.
+   - `Duration = End_Time - Start_Time` is only a soft hint for later pacing. Do not omit content just to fit that window.
+   - Use the same wording for the same name, term, and relationship in every block of this batch. Do not switch forms of address unless the source itself changes the relationship.
 
 3. **NATURAL SPOKEN REGISTER**:
-   - Write for the ear, not the eye. Use everyday conversational vocabulary heard in dubbed cinema. Avoid literary syntax or literal translationese.
+   - Write the way people actually speak. Prefer a simple sentence over a clever or literary one. If two wordings are faithful, choose the one that is easier to understand.
    - **Target Language Rules for {lang}**:
 {lang_prompt}
 

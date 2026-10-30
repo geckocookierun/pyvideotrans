@@ -17,7 +17,7 @@ def tone(path, duration, hz=440):
     t = np.arange(round(duration * 16000 / 1000)) / 16000
     # A distinct final tone verifies that the last spoken portion survives.
     freq = np.where(t > duration / 1000 * .9, hz * 2, hz)
-    sf.write(path, .25 * np.sin(2 * np.pi * freq * t), 16000)
+    sf.write(str(path), .25 * np.sin(2 * np.pi * freq * t), 16000)
     return str(path)
 
 
@@ -116,7 +116,7 @@ def test_original_track_uses_same_piecewise_map(tmp_path):
     t=np.arange(int(.2*sr))/sr
     samples[3*sr:3*sr+len(t)]=.3*np.sin(2*np.pi*600*t)
     raw=tmp_path/'original.wav'
-    sf.write(raw,samples,sr)
+    sf.write(str(raw),samples,sr)
     aligned=retime_source_audio(str(raw),obj.timeline,str(tmp_path))
     result,sr=sf.read(aligned)
     onset=np.flatnonzero(np.abs(result[:,0])>.05)[0]*1000/sr
@@ -220,16 +220,19 @@ def test_concat_rejects_frame_loss_even_when_duration_matches(tmp_path, monkeypa
                                          video_frames=30)], tmp_path/'merged.mp4')
 
 
-def test_tiny_cue_uses_gap_before_next_speech(tmp_path):
+def test_short_scene_slows_until_the_line_finishes(tmp_path):
     source=tone(tmp_path/'tts.wav',2010)
     next_audio=tone(tmp_path/'next.wav',500)
     obj,result=run(tmp_path,[queue(source,1000,1160),queue(next_audio,20680,21680,2)],seconds=23)
-    assert not obj.timeline
-    assert tools.get_video_duration(obj.novoice_mp4)==23000
-    assert result[1]['start_time']==20680
-    report=json.loads((obj.folder/'fit_report.json').read_text())
-    assert report['clips'][0]['speed']==1
-    assert 3000 <= result[0]['end_time'] <= 3050
+    scene=next(s for s in obj.timeline if s.get('cue')==0)
+    assert (scene['source_start'], scene['source_end'])==(1000,1160)
+    assert scene['target_ms']>160
+    gap=next(s for s in obj.timeline if s['source_start']==1160)
+    assert gap['target_ms']==gap['source_end']-gap['source_start']
+    assert result[0]['end_time']<=result[1]['start_time']
+    assert result[1]['start_time']>20680
+    assert tools.get_video_duration(obj.novoice_mp4)>23000
+    assert abs(audio_ms(obj.target_audio)-tools.get_video_duration(obj.novoice_mp4))<=2
 
 
 def test_tiny_cue_without_gap_can_slow_beyond_ten_times(tmp_path):
@@ -246,7 +249,7 @@ def test_tiny_cue_without_gap_can_slow_beyond_ten_times(tmp_path):
 def test_original_audio_two_ms_gap_keeps_samples(tmp_path):
     sr=48000
     samples=np.full((96,2),.25,dtype='float32')
-    source=tmp_path/'tiny.wav';sf.write(source,samples,sr,subtype='PCM_16')
+    source=tmp_path/'tiny.wav';sf.write(str(source),samples,sr,subtype='PCM_16')
     timeline=[dict(source_start=0,source_end=2,start=0,end=1000/30)]
     output=retime_source_audio(str(source),timeline,str(tmp_path))
     data,rate=sf.read(output)

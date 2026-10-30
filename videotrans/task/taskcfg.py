@@ -237,7 +237,10 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     keep_original_audio: bool = False  # 不分离：降低原声后与配音叠加
     original_audio_volume: float = 0.3  # 原声叠加音量倍数
     cover_source_hardsub: bool = False  # 最终合成前遮挡片源硬字幕区域
-    cover_source_hardsub_pct: float = 0.14  # 底部遮挡高度占画面比例
+    cover_source_hardsub_pct: float = 0.14  # 遮挡高度占画面比例
+    cover_hardsub_x: float = 0.0  # 遮挡区域左边，占画面宽
+    cover_hardsub_y: float = -1.0  # 遮挡区域上边，占画面高；<0 表示贴底
+    cover_hardsub_w: float = 1.0  # 遮挡区域宽度，占画面宽
     embed_logo: bool = False  # 最终成片叠加 logo/水印
     logo_path: Union[os.PathLike, str] = None  # logo 图片路径
     logo_pos: int = 0  # 0左上 1右上 2右下 3左下 4居中
@@ -337,7 +340,10 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
                 )
             if getattr(self, 'cover_source_hardsub', False):
                 _msg.append(
-                    f'已选 遮挡片源硬字幕, 底部高度{getattr(self, "cover_source_hardsub_pct", 0.14)}'
+                    f'已选 遮挡片源硬字幕, x={getattr(self, "cover_hardsub_x", 0)} '
+                    f'y={getattr(self, "cover_hardsub_y", -1)} '
+                    f'w={getattr(self, "cover_hardsub_w", 1)} '
+                    f'h={getattr(self, "cover_source_hardsub_pct", 0.14)}'
                 )
             if getattr(self, 'embed_logo', False) and getattr(self, 'logo_path', None):
                 _msg.append(

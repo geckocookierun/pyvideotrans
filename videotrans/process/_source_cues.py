@@ -1,4 +1,4 @@
-"""Punctuation-aware source cues, using aligned audio timestamps without text loss."""
+"""Source cues from aligned word times."""
 import copy
 import re
 import unicodedata
@@ -67,11 +67,10 @@ def segment_aligned_source(texts, language='zh'):
                 previous = chunk[-1]['word'].strip()
                 following = word['word'].strip()
                 pause = bool(_PAUSE.search(previous))
-                if re.search(r'\d[.,:，]$', previous) and following[0].isdigit():
+                if re.search(r'\d[.,:，]$', previous) and following[:1].isdigit():
                     pause = False
-                # Punctuation tokens belong to the preceding phrase.
-                is_punctuation = all(unicodedata.category(c)[0] == 'P' for c in following)
-                split = (pause or word['start']-chunk[-1]['end'] >= 1.0) and not is_punctuation
+                is_punctuation = bool(following) and all(unicodedata.category(c)[0] == 'P' for c in following)
+                split = (pause or word['start'] - chunk[-1]['end'] >= 1.0) and not is_punctuation
             if split:
                 flush()
                 chunk = []

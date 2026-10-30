@@ -29,7 +29,34 @@ def _normalize_cover_hardsub_pct(raw) -> float:
     # Values >1 are percent (11 → 0.11). Exactly 1.0 means 100% → clamp to max.
     if pct > 1.0:
         pct = pct / 100.0
-    return min(0.35, max(0.05, pct))
+    return min(0.60, max(0.03, pct))
+
+
+def cover_hardsub_geometry(pct, x=0, y=-1, w=1):
+    """Cover box as fractions of the frame: left, top, width, height.
+
+    y < 0 keeps the old bottom band (top = 1 - height).
+    """
+    h = _normalize_cover_hardsub_pct(pct)
+    try:
+        w = float(w)
+    except (TypeError, ValueError):
+        w = 1.0
+    w = min(1.0, max(0.05, w))
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        x = 0.0
+    x = min(max(0.0, x), 1.0 - w)
+    try:
+        y = float(y)
+    except (TypeError, ValueError):
+        y = -1.0
+    if y < 0:
+        y = 1.0 - h
+    else:
+        y = min(max(0.0, y), 1.0 - h)
+    return x, y, w, h
 
 
 def _format_cover_hardsub_pct(raw) -> str:
@@ -88,7 +115,12 @@ class AssembleMixin:
         import json
         if self._exit() or not getattr(self.cfg, 'cover_source_hardsub', False):
             return
-        pct = _normalize_cover_hardsub_pct(getattr(self.cfg, 'cover_source_hardsub_pct', 0.14))
+        x, y, w, h = cover_hardsub_geometry(
+            getattr(self.cfg, 'cover_source_hardsub_pct', 0.14),
+            getattr(self.cfg, 'cover_hardsub_x', 0),
+            getattr(self.cfg, 'cover_hardsub_y', -1),
+            getattr(self.cfg, 'cover_hardsub_w', 1),
+        )
         src = Path(self.cfg.novoice_mp4)
         if not src.exists():
             return
@@ -111,13 +143,19 @@ class AssembleMixin:
                 return
         self.signal(text=tr("Covering source hardsub area..."))
         tmp = cache_dir / f'novoice_cover_{os.getpid()}_{time.time_ns()}.mp4'
-        # Crop bottom band → moderate blur → overlay. trunc(.../2)*2 keeps even yuv420p sizes.
-        # Keep sigma modest so soft edges do not make Cover% look much taller than set.
+        # Crop the chosen rectangle → moderate blur → overlay back on the same spot.
+        # trunc(.../2)*2 keeps even yuv420p sizes.
         fc = (
-            f"[0:v]split[base][bot];"
-            f"[bot]crop=iw:trunc(ih*{pct:.4f}/2)*2:0:ih-trunc(ih*{pct:.4f}/2)*2,"
+            f"[0:v]split[base][roi];"
+            f"[roi]crop="
+            f"w='max(2,trunc(iw*{w:.4f}/2)*2)':"
+            f"h='max(2,trunc(ih*{h:.4f}/2)*2)':"
+            f"x='min(trunc(iw*{x:.4f}/2)*2,iw-out_w)':"
+            f"y='min(trunc(ih*{y:.4f}/2)*2,ih-out_h)',"
             f"gblur=sigma=16:steps=2,eq=saturation=0.75[blur];"
-            f"[base][blur]overlay=0:main_h-overlay_h[vout]"
+            f"[base][blur]overlay="
+            f"x='min(trunc(main_w*{x:.4f}/2)*2,main_w-overlay_w)':"
+            f"y='min(trunc(main_h*{y:.4f}/2)*2,main_h-overlay_h)'[vout]"
         )
         try:
             runffmpeg([
@@ -135,11 +173,14 @@ class AssembleMixin:
             if tmp.exists() and tmp.stat().st_size > 0:
                 tmp.replace(src)
                 try:
-                    meta.write_text(json.dumps({'pct': pct}, ensure_ascii=False), encoding='utf-8')
+                    meta.write_text(
+                        json.dumps({'x': x, 'y': y, 'w': w, 'h': h}, ensure_ascii=False),
+                        encoding='utf-8',
+                    )
                 except OSError:
                     pass
                 logger.debug(
-                    f'Blurred source hardsub band pct={pct} from {clean.name} -> {src}'
+                    f'Blurred source hardsub box x={x:.3f} y={y:.3f} w={w:.3f} h={h:.3f} from {clean.name} -> {src}'
                 )
             else:
                 logger.warning('Cover source hardsub produced empty file; keeping original novoice')

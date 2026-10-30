@@ -122,7 +122,16 @@ class Ui_MainWindow(object):
         self.cover_hardsub_pct.setVisible(False)
         self.cover_hardsub_pct.setToolTip(
             tr("Bottom cover height as percent of frame, e.g. 11 = bottom 11% (range 5–35)"))
-        # UI always shows integer percent; parser also accepts legacy 0.11 / 11%.
+        # Height is stored here; the position button opens the preview popup.
+
+        self.cover_hardsub_pos_btn = QtWidgets.QPushButton()
+        self.cover_hardsub_pos_btn.setObjectName("cover_hardsub_pos_btn")
+        self.cover_hardsub_pos_btn.setText('Y 86% · H 14%')
+        self.cover_hardsub_pos_btn.setCursor(Qt.PointingHandCursor)
+        self.cover_hardsub_pos_btn.setVisible(False)
+        self.cover_hardsub_x = 0.0
+        self.cover_hardsub_y = -1.0
+        self.cover_hardsub_w = 1.0
 
         self.embed_logo = QtWidgets.QCheckBox(self.layoutWidget)
         self.embed_logo.setMinimumSize(QtCore.QSize(0, 30))
@@ -194,8 +203,7 @@ class Ui_MainWindow(object):
         self.cover_layout.addWidget(self.back_audio)
         self.cover_layout.addWidget(self.set_ass)
         self.cover_layout.addWidget(self.cover_source_hardsub)
-        self.cover_layout.addWidget(self.cover_hardsub_pct_label)
-        self.cover_layout.addWidget(self.cover_hardsub_pct)
+        self.cover_layout.addWidget(self.cover_hardsub_pos_btn)
         self.cover_layout.addStretch()
 
         self.brand_layout = QtWidgets.QHBoxLayout()
@@ -475,7 +483,9 @@ class Ui_MainWindow(object):
             "Lower original speech and overlay dubbing on top. Can be used with Separate Vocal/BGM + Re-embed BGM: original vocal is ducked, then clean BGM is re-embedded."))
         self.cover_source_hardsub.setText(tr("Cover source hardsub"))
         self.cover_source_hardsub.setToolTip(tr(
-            "Black out the bottom band of the source video before burning subtitles, so original burned-in hardsubs do not show under the new ones."))
+            "Blur a region of the source video before burning subtitles. Click the position button to set height and place it on the imported video."))
+        self.cover_hardsub_pos_btn.setToolTip(tr(
+            "Drag the cover box on the imported video. Y is the distance from the top; height is how tall the blur is."))
         self.embed_logo.setText(tr("Embed logo"))
         self.embed_logo.setToolTip(tr(
             "Overlay a PNG/JPG logo on the final translated video (same as Tools → watermark)."))

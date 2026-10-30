@@ -230,6 +230,8 @@ class WinActionBaseModeMixin:
         if hasattr(self.main, 'cover_source_hardsub'):
             self.main.cover_source_hardsub.setDisabled(type)
             self.main.cover_hardsub_pct.setDisabled(type)
+            if hasattr(self.main, 'cover_hardsub_pos_btn'):
+                self.main.cover_hardsub_pos_btn.setDisabled(type)
         if hasattr(self.main, 'embed_logo'):
             self.main.embed_logo.setDisabled(type)
             self.main.logo_path.setDisabled(type)

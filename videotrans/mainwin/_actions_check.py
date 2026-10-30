@@ -174,19 +174,13 @@ class WinActionCheckMixin:
             hasattr(self.main, 'cover_source_hardsub') and self.main.cover_source_hardsub.isChecked()
         )
         try:
-            from videotrans.task._stage_assemble import (
-                _normalize_cover_hardsub_pct,
-                _format_cover_hardsub_pct,
-            )
-            raw = self.main.cover_hardsub_pct.text() if hasattr(self.main, 'cover_hardsub_pct') else 0.14
-            self.cfg['cover_source_hardsub_pct'] = _normalize_cover_hardsub_pct(raw)
-            # Keep the field in integer-percent form after parse
-            if hasattr(self.main, 'cover_hardsub_pct'):
-                self.main.cover_hardsub_pct.setText(
-                    _format_cover_hardsub_pct(self.cfg['cover_source_hardsub_pct'])
-                )
+            from videotrans.component.cover_hardsub_pos import cover_box_from_window
+            self.cfg.update(cover_box_from_window(self.main))
         except (TypeError, ValueError):
             self.cfg['cover_source_hardsub_pct'] = 0.14
+            self.cfg['cover_hardsub_x'] = 0.0
+            self.cfg['cover_hardsub_y'] = -1.0
+            self.cfg['cover_hardsub_w'] = 1.0
         self.cfg['embed_logo'] = bool(
             hasattr(self.main, 'embed_logo') and self.main.embed_logo.isChecked()
         )

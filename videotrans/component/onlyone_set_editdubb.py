@@ -162,9 +162,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.setMinimumHeight(int(parent.screen_size[1]*0.9))
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMaximizeButtonHint)
 
-        # Post-TTS review only: no auto-countdown — user re-dubs NoAudio then Continues.
-        self.count_down = 0
-        self.timer = None
+        self.count_down = int(float(settings.get('countdown_sec', 1)))
         self._filter_noaudio_only = False
 
         main_layout = QVBoxLayout(self)
@@ -172,12 +170,17 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         # Top Bar
         hstop = QHBoxLayout()
         self.prompt_label = QLabel(tr(
-            "Review dubbing here. Re-select and re-dub any line with no audio, then click Continue when ready."
+            "You can check the voiceover here, or modify the text and re-encode the voiceover. Please stop the countdown before proceeding"
         ))
         self.prompt_label.setStyleSheet('color:#999999')
         self.prompt_label.setWordWrap(True)
         hstop.addWidget(self.prompt_label, 1)
-        self.stop_button = None
+        self.stop_button = QPushButton(f"{tr('Click here to stop the countdown')}({self.count_down})")
+        self.stop_button.setStyleSheet("color:#ffff00")
+        self.stop_button.setCursor(Qt.PointingHandCursor)
+        self.stop_button.setMinimumSize(QSize(300, 35))
+        self.stop_button.clicked.connect(self.stop_countdown)
+        hstop.addWidget(self.stop_button)
         self.noaudio_summary = QLabel('')
         self.noaudio_summary.setStyleSheet('color:#ff4d4d; font-weight:600;')
         self.noaudio_summary.setWordWrap(True)
@@ -314,7 +317,7 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.voice_autorate.setText(tr("Dubbing acceler"))
         
         self.video_autorate = QCheckBox()
-        self.video_autorate.setObjectName("voice_autorate")
+        self.video_autorate.setObjectName("video_autorate")
         self.video_autorate.setChecked(app_cfg.onlyone_video_autorate)
         self.video_autorate.setText(tr("Slow video"))
         
@@ -470,7 +473,9 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             # 拦截表格按键事件（Ctrl+方向键调时间）
             self.table.installEventFilter(self)
             
-            # No auto-countdown after TTS — stay open until user clicks Continue.
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.update_countdown)
+            self.timer.start(1000)
             self._play_with_video(None,0,5)
             if self.parent:
                 self.raise_()                
@@ -569,12 +574,29 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         if _column in [3,4]:
             row = item.row()
             new_text = item.text().strip()
-            offset=(float(new_text)*1000)-self.queue_tts[row]['start_time' if _column==3 else 'end_time']
+            try:
+                offset=(float(new_text)*1000)-self.queue_tts[row]['start_time' if _column==3 else 'end_time']
+            except (ValueError, IndexError, KeyError, TypeError):
+                return
+            # Filling the table emits itemChanged with the same time. That must
+            # not stop the countdown or overwrite the original source interval.
+            if abs(offset) < 1:
+                return
             self._adjust_time(row,'start' if _column==3 else 'end',offset)
 
 
     def _batch_fill(self, start_row, end_row):
         """批量填充表格数据"""
+        self.table.blockSignals(True)
+        try:
+            self._fill_rows(start_row, end_row)
+        finally:
+            self.table.blockSignals(False)
+        if not getattr(self, '_time_edit_connected', False):
+            self.table.itemChanged.connect(self._text_change)
+            self._time_edit_connected = True
+
+    def _fill_rows(self, start_row, end_row):
         for row in range(start_row, end_row):
             data = self.queue_tts[row]
             
@@ -635,7 +657,6 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
             text_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 6, text_item)
         self._apply_noaudio_filter()
-        self.table.itemChanged.connect(self._text_change)
 
     def _load_remaining(self, start_row):
         """延迟加载剩余行"""
@@ -1106,18 +1127,27 @@ class EditDubbingResultDialog(QDialog,DanspMixin):
         self.reject()
 
     def update_countdown(self):
-        # Post-TTS review must never auto-close into assemble.
-        if hasattr(self, 'timer') and self.timer:
-            self.timer.stop()
-            self.timer = None
-        return
+        self.count_down -= 1
+        if hasattr(self, 'stop_button') and self.stop_button:
+            self.stop_button.setText(f"{tr('Click here to stop the countdown')}({self.count_down})")
+
+        if self.count_down <= 0:
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            self.save_and_close()
 
     def stop_countdown(self):
         if hasattr(self, 'timer') and self.timer:
             self.timer.stop()
             self.timer = None
 
-        # Keep the review tip; only remove the old stop-countdown button if present.
+        if hasattr(self, 'prompt_label') and self.prompt_label:
+            try:
+                self.prompt_label.deleteLater()
+            except RuntimeError:
+                pass
+            self.prompt_label = None
+
         if hasattr(self, 'stop_button') and self.stop_button:
             try:
                 self.stop_button.deleteLater()

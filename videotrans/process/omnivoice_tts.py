@@ -27,6 +27,22 @@ def _resolve_device(name):
     return 'cpu'
 
 
+def _voice_prompt(model, cache, wavfile, ref_text):
+    """Encode a reference clip once. Later lines with the same clip reuse it."""
+    if not wavfile:
+        return None
+    key = (wavfile, ref_text or '')
+    prompt = cache.get(key)
+    if prompt is None:
+        prompt = model.create_voice_clone_prompt(
+            ref_audio=wavfile,
+            ref_text=ref_text or None,
+        )
+        cache[key] = prompt
+        logger.debug(f'OmniVoice cached voice prompt for {wavfile}')
+    return prompt
+
+
 def omnivoice_fun(
         queue_tts_file=None,  # 配音数据存在 json文件下，根据文件路径获取
         logs_file=None,
@@ -47,6 +63,7 @@ def omnivoice_fun(
         dtype='auto'
     )
     logger.debug(f'OmniVoice-TTS本地内置渠道，running on {model.device}')
+    voice_cache = {}
     try:
         if is_redubb:
             queue_tts_file = REDUBB_QUEUE_FILE
@@ -90,10 +107,10 @@ def omnivoice_fun(
                     continue
                 if not wavfile:
                     ref_text=None
+                prompt = _voice_prompt(model, voice_cache, wavfile, ref_text)
                 wav = model.generate(
                     text=it['text'],
-                    ref_audio=wavfile,
-                    ref_text=ref_text,
+                    voice_clone_prompt=prompt,
                     speed=speed,
                     language=language
                 )

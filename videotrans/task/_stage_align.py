@@ -26,6 +26,7 @@ class AlignMixin:
             is_novoice_mp4(self.cfg.novoice_mp4, self.uuid)
         if vail_file(self.cfg.novoice_mp4):
             self.video_time = get_video_duration(self.cfg.novoice_mp4)
+        self._restore_source_intervals()
         from videotrans.task._rate import SpeedRate
 
         rate_inst = SpeedRate(
@@ -80,3 +81,40 @@ class AlignMixin:
 
         self.signal(text=tr('Alignment phase complete, awaiting the next step'))
         logger.debug(f'[声画字幕对齐阶段结束耗时]:{time.time()-_st}s')
+
+    def _restore_source_intervals(self):
+        """Use original subtitle times when a previous align saved output times.
+
+        Those output times can run past the source video, so the next run would
+        reject them as overlapping source intervals.
+        """
+        video_ms = int(self.video_time or 0)
+        cues = self.queue_tts or []
+        if video_ms <= 0 or not cues:
+            return
+        previous = 0
+        shifted = False
+        for item in cues:
+            start, end = int(item['start_time']), int(item['end_time'])
+            if start < previous or end <= start or end > video_ms:
+                shifted = True
+                break
+            previous = end
+        if not shifted:
+            return
+        source = list(getattr(self, 'source_srt_list', None) or [])
+        if len(source) != len(cues) and vail_file(self.cfg.source_sub):
+            from videotrans.util.help_srt import get_subtitle_from_srt
+            source = get_subtitle_from_srt(self.cfg.source_sub, is_file=True)
+        if len(source) != len(cues):
+            return
+        for item, src in zip(cues, source):
+            item['start_time'] = int(src['start_time'])
+            item['end_time'] = int(src['end_time'])
+            if src.get('startraw'):
+                item['startraw'] = src['startraw']
+            if src.get('endraw'):
+                item['endraw'] = src['endraw']
+        logger.warning(
+            'Target cue times run past the video; restored original subtitle times before alignment'
+        )

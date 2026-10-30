@@ -66,10 +66,6 @@ class QwenasrlocalRecogn(BaseRecogn):
         else:
             self._cut(cut_audio_list_file)
 
-        _min_speech = max(int(float(settings.get('min_speech_duration_ms', 1000))), 1000)
-        # 最长片段不得大于25s,并且不得小于 _min_speech
-        _max_speech = max(min(int(float(settings.get('max_speech_duration_s', 6)) * 1000), 25000), _min_speech + 1000)
-
         kwargs = {
             "cut_audio_list": cut_audio_list_file,
             "logs_file": logs_file,
@@ -77,8 +73,6 @@ class QwenasrlocalRecogn(BaseRecogn):
             "local_dir":self.local_dir,
             "local_dir_align":f"{ROOT_DIR}/models/models--Qwen--Qwen3-ForcedAligner-0.6B-hf",
             "hotword":settings.get('hotwords'),
-            "min_speech_ms":_min_speech,
-            "max_speech_ms":_max_speech,
             "force_align":self.detect_language in align_language,
             "detect_language":self.detect_language.split('-')[0] if self.detect_language not in ['auto',"",None] else None
         }

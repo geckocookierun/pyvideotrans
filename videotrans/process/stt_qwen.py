@@ -16,8 +16,6 @@ def qwen3asr_fun(
         logs_file=None,
         local_dir=None,
         local_dir_align=None,
-        max_speech_ms=6000,
-        min_speech_ms=3000,
         model_name=None,
         detect_language=None,
         force_align=False,  # 是否需要对齐时间戳:只有明确指定属于这些语言中的某个 ["zh","en","ja",'ko','yue','fr','es','it','de','pt','ru'] 才支持
