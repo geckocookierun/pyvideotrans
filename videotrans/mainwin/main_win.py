@@ -222,8 +222,8 @@ class MainWindow(BindSignalsMixin, LifecycleMixin, QMainWindow, Ui_MainWindow):
         logger.debug(f'Version: {VERSION}, Frozen：{config.IS_FROZEN}, OS: {sys.platform}\n上次缓存的角色:{_role},字幕嵌入类型:{_subtitle_type},发音语言:{_source_language},目标语言:{_target_language}，目标语言代码:{_langcode},模型:{_model_name},TTS渠道[{_tts_type}]')
         if _langcode:
             self.target_language.setCurrentText(_target_language)
-            if _role in _rolelist:
-                self.voice_role.setCurrentText(_role)
+        if _role in _rolelist:
+            self.voice_role.setCurrentText(_role)
         self.callback('show main window ...')
         self.show()
         QTimer.singleShot(10,self._bind_signal)

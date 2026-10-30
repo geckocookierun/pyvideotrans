@@ -31,6 +31,7 @@ class AppParams:
     AppParams: 对应 params.json，包含 getset_params 功能
     """
     _json_path: str = f"{ROOT_DIR}/videotrans/params.json"
+    _profile_path: str = f"{ROOT_DIR}/videotrans/studio_profile.json"
 
     def __post_init__(self):
         self.getset_params()
@@ -59,6 +60,10 @@ class AppParams:
         else:
             self._apply_dict(default)
             self._save_to_disk()
+
+        profile = self._load_studio_profile()
+        if profile:
+            default.update(profile)
 
         self._apply_dict(default)
         return self.to_dict()
@@ -248,7 +253,7 @@ class AppParams:
             "confuciustts_url": "http://127.0.0.1:7860",
             "f5tts_model": "",
             "f5tts_ttstype": "F5-TTS",
-            "f5tts_role": "zh_female_nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。\nzh_female_cosy.wav#希望你以后，能够做的比我还好哟！\nzh_male_bj.wav#说起咱北京的烤鸭啊，那可真是外焦里嫩、色泽金黄，一口咬下去满嘴流油！\nzh_female_cn.wav#大家好呀，今天跟你们分享一下我的日常护肤小习惯，其实护肤不需要太复杂，清洁补水最重要。\nzh_female_tw.wav#台湾有许多隐藏版的小吃店，他们可能不起眼，但食物却十分美味，下次不妨多留意身边这样的小店吧！\nen_female_1.wav#Genes of intracellular calcium metabolism and blood pressure control in primary hypertension.\nen_female_2.wav#Diamond develops and manufactures its own coils.",
+            "f5tts_role": "zh_female_nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。\nzh_female_cosy.wav#希望你以后，能够做的比我还好哟！\nzh_male_bj.wav#说起咱北京的烤鸭啊，那可真是外焦里嫩、色泽金黄，一口咬下去满嘴流油！\nzh_female_cn.wav#大家好呀，今天跟你们分享一下我的日常护肤小习惯，其实护肤不需要太复杂，清洁补水最重要。\nzh_female_tw.wav#台湾有许多隐藏版的小吃店，他们可能不起眼，但食物却十分美味，下次不妨多留意身边这样的小店吧！\nen_female_1.wav#Genes of intracellular calcium metabolism and blood pressure control in primary hypertension.\nen_female_2.wav#Diamond develops and manufactures its own coils.\ncapcut_de_thuong.wav#Người nhện, Khởi đầu mới, phim hành động, phiêu lưu và thần thoại mới ra mắt vào ngày 31 tháng 7 năm 2026 với thời lượng 145 phút.",
             "index_tts_version": 1,
             "f5tts_is_whisper": False,
             "indextts_url": "http://127.0.0.1:7860",
@@ -301,6 +306,50 @@ class AppParams:
 
     def to_dict(self) -> Dict:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+
+    # Keys written by the main window. Kept in git so a pull restores the
+    # video-translation setup. API keys stay in the gitignored params.json.
+    _PROFILE_KEYS = {
+        'clear_cache', 'only_out_mp4', 'fix_punc', 'tts_type', 'voice_role',
+        'recogn_type', 'model_name', 'remove_noise', 'subtitle_type',
+        'voice_autorate', 'video_autorate', 'is_separate', 'embed_bgm',
+        'background_music', 'enable_diariz', 'recogn2pass', 'nums_diariz',
+        'rephrase', 'is_cuda', 'output_srt', 'loop_backaudio', 'select_file_type',
+        'copysrt_rawvideo', 'source_language', 'target_language', 'translate_type',
+        'voice_rate', 'volume', 'pitch', 'keep_original_audio', 'original_audio_volume',
+        'cover_source_hardsub', 'cover_source_hardsub_pct', 'embed_logo', 'logo_path',
+        'logo_pos', 'logo_size', 'logo_margin', 'floating_channel', 'channel_name',
+        'remove_silent_mid', 'align_sub_audio', 'backaudio_volume', 'narration_mode',
+        'third_person_narration', 'narration_style',
+    }
+
+    def _load_studio_profile(self) -> Dict:
+        path = Path(self._profile_path)
+        if not path.is_file():
+            return {}
+        try:
+            loaded = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {k: v for k, v in loaded.items() if k in self._PROFILE_KEYS}
+
+    def save_studio_profile(self, data: Dict):
+        kept = {k: v for k, v in data.items() if k in self._PROFILE_KEYS}
+        if not kept:
+            return
+        path = Path(self._profile_path)
+        current = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(loaded, dict):
+                    current = {k: v for k, v in loaded.items() if k in self._PROFILE_KEYS}
+            except (OSError, json.JSONDecodeError):
+                current = {}
+        current.update(kept)
+        path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding='utf-8')
 
     def _save_to_disk(self):
         try:

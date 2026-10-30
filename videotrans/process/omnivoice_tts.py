@@ -10,6 +10,23 @@ from videotrans.configure.config import logger, ROOT_DIR, REDUBB_QUEUE_FILE, RED
 from ._utils import _write_log, convert_to_wav
 
 
+def _resolve_device(name):
+    """Pick a real device. 'auto' on this Mac otherwise stays on CPU."""
+    name = (name or 'auto').strip()
+    if name != 'auto':
+        return name
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return 'cuda'
+        mps = getattr(torch.backends, 'mps', None)
+        if mps is not None and mps.is_available():
+            return 'mps'
+    except Exception:
+        pass
+    return 'cpu'
+
+
 def omnivoice_fun(
         queue_tts_file=None,  # 配音数据存在 json文件下，根据文件路径获取
         logs_file=None,
@@ -23,9 +40,10 @@ def omnivoice_fun(
     from omnivoice import OmniVoice
     import soundfile as sf
 
+    device = _resolve_device(kw.get('device_name', 'auto'))
     model = OmniVoice.from_pretrained(
         f'{ROOT_DIR}/models/models--k2-fsa--OmniVoice',
-        device_map=kw.get('device_name','auto'),
+        device_map=device,
         dtype='auto'
     )
     logger.debug(f'OmniVoice-TTS本地内置渠道，running on {model.device}')
