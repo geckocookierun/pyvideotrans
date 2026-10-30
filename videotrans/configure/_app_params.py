@@ -31,7 +31,6 @@ class AppParams:
     AppParams: 对应 params.json，包含 getset_params 功能
     """
     _json_path: str = f"{ROOT_DIR}/videotrans/params.json"
-    _profile_path: str = f"{ROOT_DIR}/videotrans/studio_profile.json"
 
     def __post_init__(self):
         self.getset_params()
@@ -60,10 +59,6 @@ class AppParams:
         else:
             self._apply_dict(default)
             self._save_to_disk()
-
-        profile = self._load_studio_profile()
-        if profile:
-            default.update(profile)
 
         self._apply_dict(default)
         return self.to_dict()
@@ -306,50 +301,6 @@ class AppParams:
 
     def to_dict(self) -> Dict:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
-
-    # Keys written by the main window. Kept in git so a pull restores the
-    # video-translation setup. API keys stay in the gitignored params.json.
-    _PROFILE_KEYS = {
-        'clear_cache', 'only_out_mp4', 'fix_punc', 'tts_type', 'voice_role',
-        'recogn_type', 'model_name', 'remove_noise', 'subtitle_type',
-        'voice_autorate', 'video_autorate', 'is_separate', 'embed_bgm',
-        'background_music', 'enable_diariz', 'recogn2pass', 'nums_diariz',
-        'rephrase', 'is_cuda', 'output_srt', 'loop_backaudio', 'select_file_type',
-        'copysrt_rawvideo', 'source_language', 'target_language', 'translate_type',
-        'voice_rate', 'volume', 'pitch', 'keep_original_audio', 'original_audio_volume',
-        'cover_source_hardsub', 'cover_source_hardsub_pct', 'embed_logo', 'logo_path',
-        'logo_pos', 'logo_size', 'logo_margin', 'floating_channel', 'channel_name',
-        'remove_silent_mid', 'align_sub_audio', 'backaudio_volume', 'narration_mode',
-        'third_person_narration', 'narration_style',
-    }
-
-    def _load_studio_profile(self) -> Dict:
-        path = Path(self._profile_path)
-        if not path.is_file():
-            return {}
-        try:
-            loaded = json.loads(path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        if not isinstance(loaded, dict):
-            return {}
-        return {k: v for k, v in loaded.items() if k in self._PROFILE_KEYS}
-
-    def save_studio_profile(self, data: Dict):
-        kept = {k: v for k, v in data.items() if k in self._PROFILE_KEYS}
-        if not kept:
-            return
-        path = Path(self._profile_path)
-        current = {}
-        if path.is_file():
-            try:
-                loaded = json.loads(path.read_text(encoding='utf-8'))
-                if isinstance(loaded, dict):
-                    current = {k: v for k, v in loaded.items() if k in self._PROFILE_KEYS}
-            except (OSError, json.JSONDecodeError):
-                current = {}
-        current.update(kept)
-        path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding='utf-8')
 
     def _save_to_disk(self):
         try:

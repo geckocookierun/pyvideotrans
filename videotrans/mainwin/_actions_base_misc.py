@@ -106,7 +106,6 @@ class WinActionBaseMiscMixin:
             data['third_person_narration'] = mode != 'none'
             data['narration_style'] = 'third'
         params.getset_params(data)
-        params.save_studio_profile(data)
         try:
             settings['aisendsrt'] = m.aisendsrt.isChecked()
             settings.save()
